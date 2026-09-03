@@ -1,0 +1,27 @@
+# Virtual Environment (isolated uv venv)
+.venv/
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Logs & model checkpoints
+checkpoints/
+logs/
+wandb/
+
+# Data
+DS01/
+DS02/
+DS03/
+DS04/
+
