@@ -47,43 +47,62 @@ At each discrete flight cycle $t \in \{1, \dots, 200\}$, the engine telemetry pr
 ```
 
 Where:
-1. **Operating Conditions ($\mathbf{c}_t \in \mathbb{R}^4$)**: Defines the thermodynamic ambient environment and pilot command:
+
+#### 1. Operating Conditions ($\mathbf{c}_t \in \mathbb{R}^4$)
+Defines the thermodynamic ambient environment and pilot command:
+
 ```math
 \mathbf{c}_t = \begin{bmatrix} \text{ALT}_t & \text{XM}_t & \text{DTISA}_t & \text{EPR}_t \end{bmatrix}^\top
 ```
-   * $\text{ALT}_t$: Altitude in meters (baseline cruise: 10,668 m / 35,000 ft)
-   * $\text{XM}_t$: Flight Mach number (baseline cruise: 0.78)
-   * $\text{DTISA}_t$: Temperature deviation from international standard atmosphere ($\Delta T_{\text{ISA}}$ in Kelvin)
-   * $\text{EPR}_t$: Engine Pressure Ratio (primary throttle command, baseline cruise: 1.8118)
 
-2. **Observed Sensor Measurements ($\mathbf{x}_t^{\text{sensor}} \in \mathbb{R}^{14}$)**: Telemetry subject to random measurement noise, peak spikes, and potential sensor fault injections:
+* **$\text{ALT}_t$**: Altitude in meters (baseline cruise: 10,668 m / 35,000 ft)
+* **$\text{XM}_t$**: Flight Mach number (baseline cruise: 0.78)
+* **$\text{DTISA}_t$**: Temperature deviation from international standard atmosphere ($\Delta T_{\text{ISA}}$ in Kelvin)
+* **$\text{EPR}_t$**: Engine Pressure Ratio (primary throttle command, baseline cruise: 1.8118)
+
+#### 2. Observed Sensor Measurements ($\mathbf{x}_t^{\text{sensor}} \in \mathbb{R}^{14}$)
+Telemetry subject to random measurement noise, peak spikes, and potential sensor fault injections:
+
 ```math
 \mathbf{x}_t^{\text{sensor}} = \mathbf{y}_t^* + \boldsymbol{\epsilon}_t + \mathbf{f}_t
 ```
-   * $\mathbf{y}_t^* \in \mathbb{R}^{14}$: The true, uncorrupted thermodynamic engine state (clean signal).
-   * **Telemetry Noise Model ($\boldsymbol{\epsilon}_t$)**: Telemetry is corrupted by a composite noise process:
+
+* **$\mathbf{y}_t^* \in \mathbb{R}^{14}$**: The true, uncorrupted thermodynamic engine state (clean signal).
+
+**Telemetry Noise Model ($\boldsymbol{\epsilon}_t$)**:  
+Telemetry is corrupted by a composite noise process:
+
 ```math
 \boldsymbol{\epsilon}_t = \boldsymbol{\eta}_t + \mathbf{p}_t
 ```
-     where $\boldsymbol{\eta}_t \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_t)$ is zero-mean Gaussian measurement noise with channel-specific standard deviation subject to random scale expansion ($1.0\times$ to $3.0\times$), and $\mathbf{p}_t$ represents sparse peak anomalies occurring with ~1% probability with magnitudes spanning $1.0\sigma$ to $10.0\sigma$.
-   * **Sensor Fault Injection Vector ($\mathbf{f}_t \in \mathbb{R}^{14}$)**:
+
+where $\boldsymbol{\eta}_t \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_t)$ is zero-mean Gaussian measurement noise with channel-specific standard deviation subject to random scale expansion ($1.0\times$ to $3.0\times$), and $\mathbf{p}_t$ represents sparse peak anomalies occurring with ~1% probability with magnitudes spanning $1.0\sigma$ to $10.0\sigma$.
+
+**Sensor Fault Injection Vector ($\mathbf{f}_t \in \mathbb{R}^{14}$)**:  
+For healthy flight cycles ($t < t_{\text{start}}$):
+
 ```math
-\mathbf{f}_t = \mathbf{0} \quad \text{(for healthy flight cycles, } t < t_{\text{start}}\text{)}
+\mathbf{f}_t = \mathbf{0}
 ```
-     For a sensor $i$ experiencing a fault starting at flight cycle $t_{\text{start}}$:
-     * **Linear Drift**:
+
+For a sensor $i$ experiencing a fault starting at flight cycle $t_{\text{start}}$:
+
+* **Linear Drift**:
 ```math
 \mathbf{f}_t[i] = k_i \cdot (t - t_{\text{start}}) \quad (t \ge t_{\text{start}})
 ```
-     * **Exponential / Non-Linear Drift**:
+
+* **Exponential / Non-Linear Drift**:
 ```math
 \mathbf{f}_t[i] = \text{sign}_i \cdot \alpha_i \cdot (t - t_{\text{start}})^{\beta_i} \quad (t \ge t_{\text{start}}, \; \beta_i \in [2.0, 5.0])
 ```
-     * **Abrupt Step / Bias**:
+
+* **Abrupt Step / Bias**:
 ```math
 \mathbf{f}_t[i] = b_i \cdot \mathbb{I}(t \ge t_{\text{start}})
 ```
-     * **Rapid-Growth Step**: Multi-flight ramp starting at $t_{\text{start}}$ that reaches asymptote $b_i$ over $\Delta t_{\text{growth}} \in [2, 6]$ flight cycles.
+
+* **Rapid-Growth Step**: Multi-flight ramp starting at $t_{\text{start}}$ reaching asymptote $b_i$ over $\Delta t_{\text{growth}} \in [2, 6]$ flight cycles.
 
 > [!IMPORTANT]
 > **Strict Isolation of Latent Health Indices (Zero Target Leakage)**:
@@ -187,19 +206,20 @@ flowchart LR
 
 #### 3. Real-Time Inference: Normalized Residuals
 During flight, the model continuously calculates the discrepancy between reported telemetry and virtual sensor predictions:
+
 ```math
 r_{t, i} = \frac{|x_{t, i}^{\text{sensor}} - \hat{y}_{t, i}|}{\sigma_{i, \text{nominal}}}
 ```
+
 Where $\sigma_{i, \text{nominal}}$ is the standard deviation of healthy baseline residual noise for sensor $i$.
 
-* **Healthy Nominal Operation**:
+* **Healthy Nominal Operation**: The residual remains below threshold:
 ```math
 x_{t, i} \approx \hat{y}_{t, i} \implies r_{t, i} < \tau_i \quad (\text{typically } \tau_i \in [3.5, 4.5]\sigma)
 ```
-* **Sensor Failure (e.g. $+3\%$ Drift or Step Jump on $T_{030}$)**:
-  * Operating conditions and the remaining 13 sensors confirm standard cruise ($\hat{y}_{T030} = 691\,\text{K}$).
-  * Sensor reports faulty value ($x_{T030} = 740\,\text{K}$).
-  * Only $r_{T030}$ spikes (e.g. to $+15\sigma$), while other residuals remain below threshold.
+
+* **Sensor Failure (e.g. $+3\%$ Drift or Step Jump on $T_{030}$)**:  
+Operating conditions and the remaining 13 sensors confirm standard cruise ($\hat{y}_{T030} = 691\,\text{K}$), but the sensor reports a faulty value ($x_{T030} = 740\,\text{K}$). Only $r_{T030}$ spikes (e.g. to $+15\sigma$), while other residuals remain flat below threshold.
 
 #### 4. The 3-in-1 Output of Step 1:
 1. **Detection**: An alarm triggers if $\max_i(r_{t, i}) > \tau_{\text{det}}$.
@@ -244,18 +264,21 @@ flowchart TD
 ```
 
 #### 1. Architectural Components
-* **Temporal Sequence Windowing ($W \times 18$)**:
-  To enable Head 2 to recognize **drift slopes**, detect **growth rates**, and distinguish developing faults from isolated single-cycle peak spikes, the backbone takes a sliding window of recent flight cycles (e.g. $W = 10\text{–}30$ cycles) processed by a 1D-CNN, GRU, or Temporal MLP.
-* **Head 1: Continuous Signal Reconstruction**:
+
+* **Temporal Sequence Windowing ($W \times 18$)**:  
+To enable Head 2 to recognize **drift slopes**, detect **growth rates**, and distinguish developing faults from isolated single-cycle peak spikes, the backbone takes a sliding window of recent flight cycles (e.g. $W = 10\text{–}30$ cycles) processed by a 1D-CNN, GRU, or Temporal MLP.
+
+* **Head 1: Continuous Signal Reconstruction**:  
+Estimates exact physical sensor signals in Pascals, Kelvin, and RPM:
 ```math
 \hat{\mathbf{y}}_t = g_{\text{recon}}(\mathbf{z}_t) \in \mathbb{R}^{14}
 ```
-  Estimates exact physical sensor signals in Pascals, Kelvin, and RPM.
-* **Head 2: Multi-Label Fault Classification**:
+
+* **Head 2: Multi-Label Fault Classification**:  
+Outputs 14 independent sigmoid probabilities indicating fault presence for each sensor channel, supporting single-fault (`DS03`) and concurrent multi-fault (`DS04`) isolation:
 ```math
 \mathbf{p}_t = \sigma\left( g_{\text{diag}}(\mathbf{z}_t) \right) \in [0, 1]^{14}
 ```
-  Outputs 14 independent sigmoid probabilities indicating fault presence for each sensor channel, supporting single-fault (`DS03`) and concurrent multi-fault (`DS04`) isolation.
 
 #### 2. Dynamic Thresholding & Decision Fusion
 To eliminate the latency penalty of rigid boolean logic while suppressing peak-noise false alarms, TurbofanGuard applies **Adaptive Residual Thresholding**:
@@ -265,9 +288,11 @@ To eliminate the latency penalty of rigid boolean logic while suppressing peak-n
 ```
 
 Where the required residual threshold dynamically adapts based on diagnostic confidence:
+
 ```math
 \tau_{\text{adaptive}}(p_{t, i}) = \tau_{\text{high}} - (\tau_{\text{high}} - \tau_{\text{low}}) \cdot p_{t, i}
 ```
+
 * **Nominal Baseline**: When $p_{t, i} \approx 0$, threshold remains at $\tau_{\text{high}} = 4.5\sigma$, completely suppressing single-cycle $10\sigma$ peak noise spikes.
 * **Developing Subtle Drift**: As Head 2 detects multi-cycle upward trend signatures ($p_{t, i} > 0.8$), the residual threshold automatically relaxes to $\tau_{\text{low}} = 2.0\sigma$, triggering a confirmed alarm with **minimal detection latency**.
 
@@ -275,15 +300,18 @@ Where the required residual threshold dynamically adapts based on diagnostic con
 ```math
 \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{recon}} + \lambda \cdot \mathcal{L}_{\text{FDI}}
 ```
+
 Where:
 * $\mathcal{L}_{\text{recon}}$ is the Mean Squared Error (or Smooth L1) on sensor reconstruction:
 ```math
 \mathcal{L}_{\text{recon}} = \frac{1}{14} \sum_{i=1}^{14} (\hat{y}_{t, i} - y_{t, i}^*)^2
 ```
+
 * $\mathcal{L}_{\text{FDI}}$ is Multi-Label Binary Cross-Entropy with positive class weighting to handle fault class imbalance:
 ```math
 \mathcal{L}_{\text{FDI}} = -\frac{1}{14} \sum_{i=1}^{14} \left[ w_{\text{pos}} \cdot m_{t, i} \log(p_{t, i}) + (1 - m_{t, i}) \log(1 - p_{t, i}) \right]
 ```
+
 * $\lambda > 0$ balances gradient magnitudes between regression and classification branches.
 
 ---
@@ -346,32 +374,39 @@ flowchart TD
 TurbofanGuard is evaluated using standardized aerospace and machine learning metrics:
 
 ### 1. Denoising & Signal Reconstruction Metrics
+
 * **Root Mean Squared Error (RMSE)**:
 ```math
 \text{RMSE}_i = \sqrt{\frac{1}{N} \sum_{t=1}^N (\hat{y}_{t, i} - y_{t, i}^*)^2}
 ```
+
 * **Mean Absolute Percentage Error (MAPE)**:
 ```math
 \text{MAPE}_i = \frac{100\%}{N} \sum_{t=1}^N \left| \frac{\hat{y}_{t, i} - y_{t, i}^*}{y_{t, i}^*} \right|
 ```
 
 ### 2. Fault Detection & Isolation (FDI) Metrics
+
 * **False Alarm Rate (FAR / FPR)**: Fraction of healthy cycles ($t < t_{\text{start}}$ in DS03/DS04, and all cycles in DS01/DS02) that trigger an alarm:
 ```math
 \text{FAR} = \frac{\text{False Alarms in Nominal Cycles}}{\text{Total Nominal Cycles}} \quad (\text{Target: } < 1.0\%)
 ```
+
 * **True Positive Rate (TPR / Recall)**: Fraction of active fault cycles ($t \ge t_{\text{start}}$) correctly detected:
 ```math
 \text{TPR} = \frac{\text{Detected Fault Cycles}}{\text{Total Active Fault Cycles}} \quad (\text{Target: } > 95\%)
 ```
+
 * **Detection Latency ($\Delta t_{\text{det}}$)**: Number of flight cycles between fault onset and first confirmed alarm (conditioned on detection):
 ```math
 \Delta t_{\text{det}} = t_{\text{first\_alarm}} - t_{\text{fault\_start}}
 ```
+
 * **Single-Fault Isolation Accuracy (`DS03`)**:
 ```math
 \text{Acc}_{\text{iso}} = \frac{\text{Correctly Isolated Faulty Sensors}}{\text{Total Fault Injections}}
 ```
+
 * **Multi-Label Isolation Metrics (`DS04`)**:
   * **Exact Match Ratio (Subset Accuracy)**: Percentage of cycles where all 14 sensor health states are perfectly classified: $\mathbb{I}(\hat{\mathbf{m}}_t = \mathbf{m}_t)$.
   * **Multi-Label Macro F1-Score**: Harmonic mean of precision and recall evaluated independently per sensor channel and averaged.
