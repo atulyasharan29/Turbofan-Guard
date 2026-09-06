@@ -1,1 +1,7 @@
-"""Model architectures: Dual-Head 1D-CNN + BiGRU hybrid multi-task networks."""
+"""Model architectures for TurbofanGuard."""
+
+from src.models.backbone import TurbofanBackbone
+
+__all__ = [
+    "TurbofanBackbone",
+]

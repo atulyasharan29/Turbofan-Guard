@@ -1,9 +1,48 @@
-# Turbofan Sensor-FDI-Bench
+# TurbofanGuard
 
-Turbofan Sensor-FDI-Bench: A Synthetic Dataset for Sensor Fault Detection & Isolation under Degradation and Operating Variability
+**TurbofanGuard** is a deep learning system for aircraft jet engines designed to detect faulty sensors, isolate which sensors are broken, and reconstruct clean physical readings in real time under flight variability and engine degradation.
 
+```mermaid
+flowchart LR
+    subgraph Inputs["1. Telemetry Stream"]
+        Raw["18 Features<br/>• 4 Flight Conditions<br/>• 14 Raw Sensors"]
+    end
 
-## Reference
+    subgraph Core["2. TurbofanGuard Core"]
+        BB["Neural Backbone (57k params)<br/>(Multi-Scale 1D CNN + Pooling)"]
+        H1["Virtual Sensor (Reconstruction)"]
+        H2["Diagnostic AI (FDI Isolation)"]
+        BB --> H1
+        BB --> H2
+    end
+
+    subgraph Outputs["3. Operational Outputs"]
+        Y["Clean Signals (14 Channels)"]
+        Alarm["Zero-Noise-Spike Alarms"]
+        Iso["Broken Sensor Isolated"]
+        H1 --> Y
+        H1 & H2 --> Alarm & Iso
+    end
+
+    Raw --> BB
+```
+
+## Quick Links to Documentation
+
+All technical documentation is organized in simple, easy-to-read guides with GitHub math blocks:
+
+* **[Documentation Hub](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/README.md)**: Main landing page, glossary of terms, and progress summary.
+* **[Dataset & Ingestion Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/dataset_and_pipeline.md)**: Overview of suites DS01–DS04, 18 input features, 14 clean targets, strict data leakage isolation, and the raw Parquet reader.
+* **[Feature Scaling & Normalization](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/data_scaling.md)**: Why neural networks need scaling, StandardScaler, zero-leakage training fit, solving the DS01 zero-variance issue, and inverse transforms.
+* **[Neural Backbone Architecture](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/backbone_architecture.md)**: Deep dive into the 57,664-parameter backbone, multi-scale 1D convolutions (k=3, k=5), temporal pooling, snapshot fallback, and 64D latent state.
+* **[Machine Learning Strategy](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/ml_strategy.md)**: The physics of analytical redundancy, Step 1 Autoencoder vs. Step 2 Dual-Head network, adaptive thresholding (two-factor authentication for alarms), and evaluation metrics.
+* **[Developer & Testing Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/developer_guide.md)**: How to run automated test scripts (`uv run python scripts/...`), manage JSON configs, and build next-stage modules.
+
+---
+
+## Benchmark Dataset Reference
+
+TurbofanGuard is built and evaluated on the **Turbofan Sensor-FDI-Bench** dataset:
 
 Aytunc Yildirim, Martin Bolemant, and Marvin Nöthen,
 9th European Conference of the Prognostics and Health Management Society, 2026, Oslo.

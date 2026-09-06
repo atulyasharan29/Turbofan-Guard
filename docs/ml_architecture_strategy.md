@@ -1,117 +1,257 @@
-# TurbofanGuard: Machine Learning Architecture Strategy
+# TurbofanGuard: Complete Machine Learning Architecture Strategy
 
-## 1. Executive Summary & System Vision
+This document provides a comprehensive explanation of the machine learning architecture strategy behind **TurbofanGuard**. It covers the physical foundations of jet engine sensing, mathematical formulations, fault injection mechanisms, the two-step architectural progression, loss functions, and evaluation metrics.
 
-**TurbofanGuard** is an end-to-end Fault Detection, Isolation (FDI), and Signal Reconstruction pipeline for turbofan jet engines operating under real-world performance degradation and flight variability.
+---
 
-When deployed on an engine's continuous telemetry stream, the system solves three simultaneous objectives:
-1. **Fault Detection**: Determine whether an anomaly or sensor failure has occurred ($\text{Healthy} \to 0, \text{Faulty} \to 1$).
-2. **Fault Isolation**: Identify precisely **which** of the 14 sensors is malfunctioning (e.g. *"Sensor $T_{030}$ has a $+2\%$ linear drift"*).
-3. **Signal Reconstruction (Virtual Sensing)**: Estimate the clean, uncorrupted thermodynamic truth $\hat{\mathbf{y}}_t \in \mathbb{R}^{14}$ to replace the damaged measurement, allowing the flight control computer and maintenance crew to operate safely.
+## 1. Executive Summary & The Three Operational Goals
+
+When deployed on an aircraft engine's live telemetry stream during flight, TurbofanGuard continuously solves three simultaneous operational objectives:
+
+```mermaid
+flowchart TD
+    Stream["Engine Telemetry Stream (18 Features)<br/>(4 Flight Conditions + 14 Raw Sensors)"] --> TG["TurbofanGuard Multi-Task Engine"]
+    
+    TG --> G1["Goal 1: Fault Detection<br/>'Is any sensor broken on this engine?'<br/>Output: Healthy (0) or Faulty (1)"]
+    TG --> G2["Goal 2: Fault Isolation<br/>'Which exact sensor(s) is broken?'<br/>Output: Diagnostic Flags (e.g. T030, NL)"]
+    TG --> G3["Goal 3: Signal Reconstruction (Virtual Sensing)<br/>'What should the clean sensor readings be?'<br/>Output: 14 Clean Denoised Physical Signals (K, Pa, RPM)"]
+```
+
+### Goal 1: Fault Detection (Is Something Broken?)
+Determines whether any sensor on the engine is currently experiencing a failure:
+
+```math
+\text{State}_t \in \{0, 1\} \quad (0 = \text{Healthy}, \; 1 = \text{Faulty})
+```
+
+* **In Plain English**: At every flight cycle, the system makes a binary decision: is the overall sensing system operating normally (state = 0), or has at least one sensor suffered an electrical or mechanical breakdown (state = 1)?
+* **Variables**:
+  * `State_t`: Binary health status of the engine sensing system at flight cycle t.
+  * `0`: Normal / healthy state (all sensors operating normally within expected noise).
+  * `1`: Active fault state (one or more sensors are malfunctioning).
+
+### Goal 2: Fault Isolation (Which Sensor is Broken?)
+Pinpoints precisely which of the 14 sensors is malfunctioning:
+
+```math
+\mathbf{m}_t \in \{0, 1\}^{14}
+```
+
+* **In Plain English**: A binary checklist of 14 switches, one for each sensor channel. If sensor 13 (compressor exit temperature T030) has a broken thermocouple, switch 13 flips to 1, while all other healthy switches remain 0.
+* **Variables**:
+  * `m_t`: Multi-hot binary fault indicator vector for the 14 sensors at flight cycle t.
+  * `m_{t, i} = 1`: Sensor channel i is actively faulty at flight cycle t.
+  * `m_{t, i} = 0`: Sensor channel i is operating normally at flight cycle t.
+
+### Goal 3: Signal Reconstruction (Virtual Sensing)
+Estimates the clean, uncorrupted thermodynamic truth to replace damaged telemetry:
+
+```math
+\hat{\mathbf{y}}_t \in \mathbb{R}^{14}
+```
+
+* **In Plain English**: An on-wing software sensor that calculates what all 14 engine instruments *should* read under true physics, with all electrical noise and fault offsets removed.
+* **Variables**:
+  * `ŷ_t` ("y-hat"): The 14-dimensional vector of clean reconstructed sensor estimates at flight cycle t.
+  * `R^14`: 14 continuous physical numbers in real engineering units (Kelvin, Pascals, RPM, kg/s).
+
+---
+
+## 2. Mathematical Formulation of Telemetry and Faults
+
+### 2.1 Input Feature Space (18 Features)
+At each discrete flight cycle t (from cycle 1 to 200), the engine telemetry delivers an 18-dimensional vector:
+
+```math
+\mathbf{x}_t = \begin{bmatrix} \mathbf{c}_t \\ \mathbf{x}_t^{\text{sensor}} \end{bmatrix} \in \mathbb{R}^{18}
+```
+
+* **In Plain English**: The input vector is formed by stacking the 4 environmental flight conditions on top of the 14 raw sensor telemetry readings.
+* **Variables**:
+  * `x_t`: Full 18-dimensional telemetry input vector at flight cycle t.
+  * `c_t`: 4-dimensional vector of flight operating conditions.
+  * `x_t^sensor`: 14-dimensional vector of observed sensor telemetry.
+
+#### 1. Operating Conditions (4 Features)
+```math
+\mathbf{c}_t = \begin{bmatrix} \text{ALT}_t \\ \text{XM}_t \\ \text{DTISA}_t \\ \text{EPR}_t \end{bmatrix} \in \mathbb{R}^4
+```
+
+* **In Plain English**: These 4 numbers inform the model where the aircraft is flying, how fast it is moving, how warm or cold the ambient air is, and how much thrust the pilot has demanded.
+* **Variables**:
+  * `ALT_t`: Flight altitude in meters (baseline cruise is 10,668 m, or 35,000 ft).
+  * `XM_t`: Flight Mach number (dimensionless speed relative to sound, baseline is 0.78).
+  * `DTISA_t`: Delta ISA ambient temperature deviation in Kelvin.
+  * `EPR_t`: Engine Pressure Ratio (primary throttle command, baseline is 1.8118).
+
+#### 2. Observed Sensor Telemetry (14 Channels)
+```math
+\mathbf{x}_t^{\text{sensor}} = \mathbf{y}_t^* + \boldsymbol{\epsilon}_t + \mathbf{f}_t \in \mathbb{R}^{14}
+```
+
+* **In Plain English**: What a physical sensor actually records equals the true underlying engine physics, plus measurement noise, plus any error caused by an active sensor breakdown.
+* **Variables**:
+  * `x_t^sensor`: 14 observed sensor channels recorded in telemetry at cycle t.
+  * `y_t^*`: True, latent thermodynamic engine state (the clean signal if no noise or faults existed).
+  * `ϵ_t`: Total measurement noise vector added by electronics and sensor instrumentation.
+  * `f_t`: Fault injection vector representing physical or electrical failure on one or more sensors (equals zero when healthy).
+
+---
+
+### 2.2 Telemetry Noise Model
+In real aircraft, telemetry is corrupted by a composite noise process:
+
+```math
+\boldsymbol{\epsilon}_t = \boldsymbol{\eta}_t + \mathbf{p}_t
+```
+
+* **In Plain English**: Sensor noise is composed of two independent phenomena: constant background Gaussian noise present on every reading, plus occasional high-magnitude spikes.
+* **Variables**:
+  * `ϵ_t`: Composite noise vector affecting all 14 sensors at cycle t.
+  * `η_t`: High-frequency Gaussian measurement noise.
+  * `p_t`: Sparse peak noise vector (intermittent large electrical spikes occurring on approximately 1% of samples).
+
+Where background Gaussian measurement noise is defined as:
+
+```math
+\boldsymbol{\eta}_t \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_t)
+```
+
+* **In Plain English**: Background noise follows a bell curve centered at zero error, with individual standard deviations for each sensor that fluctuate randomly between 1.0x and 3.0x across different flights.
+* **Variables**:
+  * `η_t`: Gaussian noise vector at cycle t.
+  * `N`: Normal (Gaussian) probability distribution.
+  * `0`: Mean vector of 14 zeros (noise does not create a permanent bias).
+  * `Σ_t`: Covariance matrix containing the individual variance for each sensor channel.
+
+---
+
+### 2.3 Sensor Fault Injection Mechanisms
+When an engine is operating normally before a fault begins:
+
+```math
+\mathbf{f}_t = \mathbf{0} \quad (t < t_{\text{start}})
+```
+
+* **In Plain English**: Before a fault starts, the fault vector is zero on all 14 channels—the engine sensors are undamaged.
+* **Variables**:
+  * `f_t`: 14-dimensional sensor fault vector at cycle t.
+  * `t`: Current flight cycle counter (from cycle 1 to 200).
+  * `t_start`: Flight cycle at which a sensor fault begins.
+
+When a sensor `i` experiences a failure starting at flight cycle `t_start`, the error `f_t[i]` follows one of four realistic mathematical patterns:
+
+#### Pattern A: Linear Drift
+```math
+\mathbf{f}_t[i] = k_i \cdot (t - t_{\text{start}}) \quad (t \ge t_{\text{start}})
+```
+
+* **In Plain English**: Sensor i gradually drifts away from true physics at a steady rate of k_i engineering units per flight cycle.
+* **Variables**:
+  * `f_t[i]`: Fault error added to sensor i at cycle t.
+  * `k_i`: Drift slope (rate of error added per flight cycle; can be positive or negative).
+  * `t - t_start`: Number of flight cycles elapsed since the fault began.
+
+#### Pattern B: Exponential / Non-Linear Drift
+```math
+\mathbf{f}_t[i] = \text{sign}_i \cdot \alpha_i \cdot (t - t_{\text{start}})^{\beta_i} \quad (t \ge t_{\text{start}}, \; \beta_i \in [2.0, 5.0])
+```
+
+* **In Plain English**: Sensor i drifts away slowly at first, but accelerates non-linearly over time according to a power-law exponent between 2.0 and 5.0.
+* **Variables**:
+  * `sign_i`: Direction of the drift (+1 for positive upward drift, -1 for negative downward drift).
+  * `α_i`: Drift intensity scaling coefficient.
+  * `β_i`: Non-linear growth exponent (between 2.0 and 5.0).
+
+#### Pattern C: Abrupt Step / Bias
+```math
+\mathbf{f}_t[i] = b_i \cdot \mathbb{I}(t \ge t_{\text{start}})
+```
+
+* **In Plain English**: At cycle t_start, sensor i instantaneously jumps by a fixed constant bias b_i and stays offset permanently.
+* **Variables**:
+  * `b_i`: Fixed bias magnitude (e.g. +15 Kelvin or -20 kPa).
+  * `I(...)`: Mathematical indicator function, which equals 1 when t >= t_start, and 0 otherwise.
+
+#### Pattern D: Rapid-Growth Step
+```math
+\mathbf{f}_t[i] = b_i \cdot \min\left(1, \; \frac{t - t_{\text{start}}}{\Delta t_{\text{growth}}}\right) \quad (\Delta t_{\text{growth}} \in [2, 6])
+```
+
+* **In Plain English**: The fault ramps up linearly from zero to full bias b_i over a brief window of 2 to 6 flights, and then remains permanently clamped at b_i.
+* **Variables**:
+  * `Δt_growth`: Ramp-up duration in flight cycles (takes 2 to 6 cycles to reach full error).
+  * `min(1, ...)`: Clamps the multiplier at 1.0 once the ramp period completes so the bias stops growing.
+
+---
+
+## 3. The Foundational Principle: "Analytical Redundancy"
+
+To understand why machine learning can diagnose jet engines, consider how an aircraft engine works:
+
+> **The Jet Engine is a Connected Physical Machine**:
+> An aircraft turbofan is governed by strict laws of thermodynamics (conservation of mass, momentum, and energy). No sensor operates in isolation.
+> When the pilot pushes the throttle forward (Engine Pressure Ratio `EPR` increases):
+> * Fuel flow (`WFE`) **must** increase to deliver chemical energy.
+> * High-pressure spool speed (`NH`) and low-pressure fan speed (`NL`) **must** accelerate.
+> * Pressures along the gas path (`P023`, `P030`, `P044`, `P050`) **must** rise in exact aerodynamic ratios.
+> * Gas temperatures (`T023`, `T030`, `T050`) **must** climb predictably.
 
 ```mermaid
 flowchart LR
-    subgraph Inputs
-        X["Input Vector X (18D)<br/>• 4 Flight Conditions<br/>• 14 Observed Sensors"]
+    subgraph Hardware["Traditional Approach: Hardware Redundancy"]
+        H1["Physical Sensor A"]
+        H2["Physical Sensor B (Duplicate)"]
+        H3["Physical Sensor C (Triplicate)"]
+        H1 & H2 & H3 --> Vote["Majority Voting Logic<br/>(Heavy, expensive, complex wiring)"]
     end
 
-    subgraph TurbofanGuard["TurbofanGuard Architecture"]
-        Enc["Encoder / Feature Extractor<br/>(Physics & Temporal Representation)"]
-        H1["Reconstruction Head<br/>(Clean Signal Estimator)"]
-        H2["Diagnostic Head<br/>(Fault Classification)"]
-        Enc --> H1
-        Enc --> H2
-    end
-
-    subgraph Outputs
-        Y_hat["Output 1: Reconstructed Signals Ŷ ∈ ℝ¹⁴<br/>(Virtual Sensor Denoising)"]
-        Res["Residuals r_i = |X_i - Ŷ_i|"]
-        FDI["Output 2: Fault Detection & Isolation<br/>• Alarm: Active / Normal<br/>• Isolated Sensor: e.g. T030"]
-        H1 --> Y_hat
-        Y_hat --> Res
-        Res --> FDI
-        H2 --> FDI
+    subgraph Analytical["Modern Approach: Analytical Redundancy"]
+        S["Single Physical Sensors<br/>(Lightweight, lower cost)"] --> Twin["Digital Twin / Neural Network<br/>(Understands physics connecting all sensors)"]
+        Twin --> Detect["Fault Detected via Thermodynamic Contradiction!"]
     end
 ```
 
+### Hardware Redundancy vs. Analytical Redundancy
+* **Hardware Redundancy**: In older aircraft, engineers installed two or three duplicate sensors on every pipe. If Sensor A read 700 K and Sensor B read 700 K, but Sensor C read 750 K, a voting computer dropped Sensor C. However, adding physical sensors adds structural weight, cabling, cost, and additional failure points.
+* **Analytical Redundancy**: Instead of extra physical hardware, we use **software intelligence**. Because all 14 sensors are physically connected through the thermodynamic cycle, 13 healthy sensors can mathematically verify the 14th sensor!
+  * If altitude, airspeed, throttle, and 13 sensors all indicate standard cruise at 691 K, but sensor `T030` suddenly reports 740 K, the laws of thermodynamics are violated.
+  * The engine cannot physically produce 740 K without other pressures and speeds changing. Therefore, **the engine is fine, but sensor `T030` is broken**.
+
 ---
 
-## 2. Mathematical Formulation
+## 4. The Two-Step Architectural Strategy
 
-### 2.1 Input Feature Space ($\mathbf{x}_t \in \mathbb{R}^{18}$)
-
-At each discrete flight cycle $t \in \{1, \dots, 200\}$, the engine telemetry provides an 18-dimensional vector:
-
-$$\mathbf{x}_t = \begin{bmatrix} \mathbf{c}_t \\ \mathbf{x}_t^{\text{sensor}} \end{bmatrix} \in \mathbb{R}^{18}$$
-
-Where:
-1. **Operating Conditions ($\mathbf{c}_t \in \mathbb{R}^4$)**: Defines the thermodynamic ambient environment and pilot command:
-   $$\mathbf{c}_t = \begin{bmatrix} \text{ALT}_t & \text{XM}_t & \text{DTISA}_t & \text{EPR}_t \end{bmatrix}^\top$$
-   * $\text{ALT}_t$: Altitude (meters)
-   * $\text{XM}_t$: Flight Mach number
-   * $\text{DTISA}_t$: Temperature deviation from standard atmosphere ($\Delta T_{ISA}$ in Kelvin)
-   * $\text{EPR}_t$: Engine Pressure Ratio (throttle command)
-
-2. **Observed Sensor Measurements ($\mathbf{x}_t^{\text{sensor}} \in \mathbb{R}^{14}$)**: Telemetry subject to electrical noise, peak spikes, and potential sensor failures:
-   $$\mathbf{x}_t^{\text{sensor}} = \mathbf{y}_t^* + \boldsymbol{\epsilon}_t + \mathbf{f}_t$$
-   * $\mathbf{y}_t^* \in \mathbb{R}^{14}$: The true, latent thermodynamic engine state (clean signal).
-   * $\boldsymbol{\epsilon}_t \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_t)$: High-frequency Gaussian measurement noise and peak anomalies.
-   * $\mathbf{f}_t \in \mathbb{R}^{14}$: Sensor fault injection vector:
-     $$\mathbf{f}_t = \mathbf{0} \quad \text{(when healthy)}$$
-     $$\mathbf{f}_t[i] = k_i \cdot (t - t_{\text{start}}) \quad \text{(for linear drift fault on sensor } i \text{)}$$
-     $$\mathbf{f}_t[i] = b_i \cdot \mathbb{I}(t \ge t_{\text{start}}) \quad \text{(for abrupt step bias on sensor } i \text{)}$$
-
-### 2.2 Target Space
-
-* **Reconstruction Target**: The true clean physics vector $\mathbf{y}_t^* \in \mathbb{R}^{14}$ (`*_truth` channels).
-* **Isolation Target**: A multi-hot binary vector $\mathbf{m}_t \in \{0, 1\}^{14}$, where $m_{t, i} = 1$ if sensor $i$ is faulty at flight c## 3. The Two-Step Architectural Strategy
-
-Rather than building an opaque "black-box" model, we adopt a two-step progression that mirrors aerospace industry standards:
+Rather than building an opaque, black-box model that tries to do everything in one unexplainable step, TurbofanGuard follows a structured two-step roadmap:
 
 ```text
-Step 1: Baseline Autoencoder (Physics-Informed Residual FDI)
+Step 1: Baseline Denoising Autoencoder / Virtual Sensor (Physics Residual FDI)
    └── Concept: "Virtual Sensing via Analytical Redundancy"
    └── Training: Self-supervised on healthy flights only (DS01 & DS02)
-   └── How it works: Compares actual telemetry vs. physics-predicted telemetry
-   └── Output: Continuous reconstructed signals + anomaly detection via residual spikes
+   └── Supervision: Clean targets y* (Zero fault labels needed during training!)
+   └── Decision: Static residual thresholding (r_i > tau_i)
+   └── Strength: Highly interpretable, zero-fault training, physics-grounded
 
-Step 2: Dual-Head Multi-Task Network (Physics + AI Classifier)
+Step 2: Dual-Head Multi-Task Network (Physics + Diagnostic AI)
    └── Concept: "Two-Factor Authentication for Sensor Alarms"
-   └── Training: End-to-end multi-task on healthy + faulted data (DS02 & DS03)
-   └── Head 1 (Reconstruction): Estimates true physical sensor values (Kelvin, Pascals, RPM)
-   └── Head 2 (Diagnostic FDI): Directly outputs fault probabilities per sensor (0% to 100%)
-   └── Decision: Alarms fire only when BOTH the physical residual and AI probability agree
+   └── Training: End-to-end multi-task on healthy + faulted data (DS02, DS03, DS04)
+   └── Head 1 (Reconstruction): Estimates clean continuous signals ŷ_t ∈ ℝ¹⁴
+   └── Head 2 (Diagnostic FDI): Outputs multi-label fault probabilities p_t ∈ [0, 1]¹⁴
+   └── Decision: Adaptive dynamic thresholding fusing physical residuals with AI confidence
+   └── Strength: Rejects noise spikes, near-zero detection latency on slow drifts
 ```
 
 ---
 
-### The Foundational Principle: "Analytical Redundancy"
+## 5. Step 1: Baseline Denoising Autoencoder (Physics-Informed Residual FDI)
 
-To understand why this strategy works, consider how an aircraft jet engine functions:
-
-> **The Engine is a Connected Physical Machine**:
-> An engine is governed by strict laws of thermodynamics (conservation of mass, energy, and momentum). If a pilot pushes the throttle forward (`EPR` rises):
-> * Fuel flow (`WFE`) **must** increase.
-> * The compressor spool (`NH`) **must** spin faster.
-> * Pressures along the gas path (`P023`, `P030`, `P050`) **must** climb.
-> * Gas temperatures (`T030`, `T050`) **must** increase in a predictable ratio.
-
-**No sensor exists in isolation.** In traditional aviation, engineers achieved safety through **Hardware Redundancy** (installing 2 or 3 duplicate physical sensors on every pipe). However, adding physical sensors adds weight, cost, wiring, and failure points.
-
-**TurbofanGuard achieves "Analytical (Software) Redundancy"**:
-By learning the thermodynamic coupling across all 14 sensors and 4 flight conditions, the neural network acts as a real-time **Digital Twin**. If 13 sensors and the flight conditions indicate the engine is cruising quietly, but 1 temperature sensor suddenly screams that it is at $1000\,\text{K}$, the AI knows with mathematical certainty that **the engine is fine, but that one sensor has failed**.
-
----
-
-### Step 1: Baseline Denoising Autoencoder (Physics-Informed Residual FDI)
-
-Step 1 is an **unsupervised, self-supervised** approach. It requires **zero prior fault labels** during training.
+Step 1 trains a virtual sensor on **nominal (healthy) flights only** (`DS01` and `DS02`). It requires **zero fault labels** during training.
 
 ```mermaid
 flowchart LR
     subgraph Compression["1. Compression (Encoder)"]
-        X["Observed Telemetry x_t (18D)<br/>[ALT, Mach, EPR, T030, P030...]"] --> Enc["Encoder Layers"]
-        Enc --> Latent["Latent Bottleneck z_t (8D)<br/>(Extracts Pure Engine State)"]
+        X["Observed Telemetry x_t (18D)"] --> Enc["Encoder Layers + Masking"]
+        Enc --> Latent["Latent Bottleneck z_t (64D)<br/>(Extracts Pure Engine State)"]
     end
 
     subgraph Expansion["2. Reconstruction (Decoder)"]
@@ -122,195 +262,227 @@ flowchart LR
     subgraph ResidualMath["3. Residual Comparison"]
         X_sens["Observed Sensors x_t_sensor (14D)"] --> Minus(( - ))
         Y_hat --> Minus
-        Minus --> Res["Residual Vector r_i = |x_i - ŷ_i| / σ_i"]
+        Minus --> Res["Normalized Residual r_i = |x_i - ŷ_i| / σ_i"]
     end
 
     subgraph Decision["4. Decision Logic"]
-        Res --> Thresh{"r_i > Threshold τ_i ?"}
+        Res --> Thresh{"Residual r_i > Threshold τ_i ?"}
         Thresh -- "Yes (Spike!)" --> Fault["FAULT on Sensor i!<br/>Replace x_i with ŷ_i"]
         Thresh -- "No (Near 0)" --> Healthy["Healthy Sensor"]
     end
 ```
 
-#### 1. The "Information Bottleneck" Metaphor
-Why does the Autoencoder remove noise instead of just memorizing it?
-* The network takes **18 noisy input features** and forces them through a narrow **latent bottleneck** (e.g. 8 dimensions).
-* A random noise spike on sensor $T_{030}$ cannot be predicted from the other 17 features.
-* Because the bottleneck is too small to store random noise, the network has no choice but to prioritize the **shared thermodynamic physics** (the engine's true power, speed, and thermal state).
-* The Decoder then expands this clean physical state back into the **14 clean sensor readings** $\hat{\mathbf{y}}_t$.
+### 1. The Information Bottleneck & Channel Masking
+The network compresses the 18 telemetry features through a narrow latent bottleneck (`z_t`).
+* **Channel Masking Augmentation**: If sensor `T030` suffers a massive +50 K jump during flight, we do not want that bad number to corrupt the latent state `z_t` and distort the predictions for the other 13 sensors.
+* To prevent this, the encoder is trained with **random channel masking**: during training, 1 or 2 sensor channels are randomly zeroed out. This forces the network to learn how to predict all 14 sensors from flight conditions and the remaining unmasked sensors.
 
-#### 2. Training: The "Healthy Doctor" Principle
-* **Training Data**: Trained **strictly on nominal, healthy flights** (`DS02` / `DS01`).
-* **Loss Function**: Mean Squared Error (MSE) between the model's prediction $\hat{\mathbf{y}}_t$ and the clean ground truth $\mathbf{y}_t^*$:
-  $$\mathcal{L}_{\text{recon}}(\theta) = \frac{1}{B \cdot 14} \sum_{b=1}^B \sum_{i=1}^{14} \left( \hat{y}_{b, i} - y_{b, i}^* \right)^2$$
-* **Intuition**: Like a cardiologist who listens to 10,000 healthy heartbeats, the model becomes an expert on what healthy engine dynamics look like across any altitude or throttle setting. It does not need to memorize every possible sensor failure in advance.
+### 2. Training Objective: Reconstruction Loss
+Trained on healthy flights to minimize the difference between estimated signals and clean targets:
 
-#### 3. Real-Time Inference: How Faults Are Caught
-During flight, the model continuously compares what the sensor **actually reports** ($x_{t, i}^{\text{sensor}}$) against what the model **predicts it should report** ($\hat{y}_{t, i}$):
+```math
+\mathcal{L}_{\text{recon}} = \frac{1}{14} \sum_{i=1}^{14} (\hat{y}_{t, i} - y_{t, i}^*)^2
+```
 
-$$\text{Normalized Residual } r_{t, i} = \frac{|x_{t, i}^{\text{sensor}} - \hat{y}_{t, i}|}{\sigma_{i, \text{nominal}}}$$
+* **In Plain English**: The model measures the average squared difference between its virtual sensor predictions and the true physical values across all 14 channels, updating its weights to make this error as small as possible.
+* **Variables**:
+  * `L_recon`: Reconstruction Mean Squared Error (MSE).
+  * `ŷ_{t, i}`: Model predicted clean value for sensor i.
+  * `y_{t, i}^*`: True ground-truth clean value for sensor i.
+  * `14`: Number of sensor channels.
 
-Where $\sigma_{i, \text{nominal}}$ is the expected standard deviation of that sensor's healthy noise.
+### 3. Real-Time Inference: Normalized Physical Residuals
+During flight, the model continuously compares what the physical sensor reports against what the virtual sensor predicts:
 
-* **When Healthy**:
-  The sensor reading matches the physics:
-  $$x_{t, i} \approx \hat{y}_{t, i} \implies r_{t, i} \approx 0 \quad (\text{stays below threshold } \tau_i)$$
-* **When Sensor $T_{030}$ Fails (e.g. $+3\%$ Drift or Step Jump)**:
-  * The engine itself is completely fine.
-  * The other 13 sensors and the flight conditions tell the model: *"Engine is at normal cruise; $T_{030}$ should be $691\,\text{K}$."*
-  * But the faulty sensor reports $740\,\text{K}$.
-  * Only $r_{T030}$ spikes from $\approx 0$ to $+15\sigma$! The remaining 13 residuals stay flat near zero.
+```math
+r_{t, i} = \frac{|x_{t, i}^{\text{sensor}} - \hat{y}_{t, i}|}{\sigma_{i, \text{nominal}}}
+```
 
-#### 4. The 3-in-1 Output of Step 1:
-1. **Detection**: An alarm fires because the maximum residual exceeded threshold: $S_t = \max_i(r_{t, i}) > \tau_{\text{det}}$.
-2. **Isolation**: The faulty sensor is identified by finding which index spiked: $\arg\max_i(r_{t, i})$.
-3. **Signal Reconstruction**: The aircraft flight control computer drops the faulty $740\,\text{K}$ reading and instantly adopts the model's clean virtual prediction ($\hat{y}_{T030} = 691\,\text{K}$).
+* **In Plain English**: The residual measures how many standard deviations of normal noise the sensor reading is away from what the physics model says it should be.
+* **Variables**:
+  * `r_{t, i}`: Normalized residual for sensor i at flight cycle t (a dimensionless score).
+  * `x_{t, i}^sensor`: Raw physical measurement reported by the sensor.
+  * `ŷ_{t, i}`: Virtual sensor prediction.
+  * `σ_{i, nominal}`: Expected normal noise standard deviation for that sensor.
+
+### 4. Decision Rule (Static Thresholding)
+* **Healthy Sensor**: Telemetry matches virtual prediction closely:
+```math
+x_{t, i} \approx \hat{y}_{t, i} \implies r_{t, i} < \tau_i \quad (\text{typically } \tau_i \approx 3.5 \text{ to } 4.5)
+```
+* **Faulty Sensor**: Telemetry diverges from physics:
+```math
+r_{t, i} > \tau_i \implies \text{Alarm! Sensor } i \text{ is faulty!}
+```
+* **Signal Healing**: Once flagged, the flight computer discards the damaged physical reading and adopts the clean virtual prediction:
+```math
+x_{t, i}^{\text{validated}} \leftarrow \hat{y}_{t, i}
+```
 
 ---
 
-### Step 2: Dual-Head Multi-Task Architecture (Physics + Diagnostic AI)
+## 6. Step 2: Dual-Head Multi-Task Architecture (Physics + Diagnostic AI)
 
-While Step 1 is powerful and elegant, relying solely on static thresholds ($\tau$) has two real-world limitations:
-1. **The Threshold Dilemma**: If $\tau$ is set too low, a momentary turbulence bump or sensor spike can cause an annoying **false alarm**. If $\tau$ is set too high, a slow, subtle sensor drift will take 50 flight cycles before it is detected (**delayed detection**).
-2. **Multi-Sensor Faults (`DS04`)**: When two or three sensors break simultaneously, their combined errors can slightly bias the encoder's latent state.
+While Step 1 is effective, relying solely on static residual thresholds faces practical limitations:
+1. **Noise Spikes Cause False Alarms**: A single random electrical spike can momentarily breach a static threshold of 4.0 sigma, triggering a false alarm.
+2. **Detection Latency on Slow Drifts**: A subtle drift growing by only 0.1 sigma per flight cycle can take 35 to 40 flights before it finally crosses a high static threshold.
+3. **Multi-Fault Ambiguity (DS04)**: When 2 or 3 sensors break at the same time, multiple residuals spike, requiring an intelligent classifier to disentangle them.
 
-Step 2 overcomes this by building a **Dual-Head Multi-Task Network** that combines physics estimation with an AI diagnostic classifier.
+Step 2 resolves these limitations with a **Dual-Head Multi-Task Network**:
 
 ```mermaid
 flowchart TD
-    subgraph SharedBackbone["Shared Neural Backbone (The Brain)"]
-        In["Input Vector x_t ∈ ℝ¹⁸ (or Sequence Window W × 18)"] --> Backbone["Deep Representation Layers<br/>(Extracts Shared Thermodynamic & Temporal Features)"]
-        Backbone --> Z["Shared Latent Feature Vector z_t"]
+    subgraph Backbone["1. Shared Neural Backbone"]
+        Window["Input Sequence Window (W × 18)"] --> Net["TurbofanBackbone<br/>(Multi-scale Convolutions + Temporal Pooling)"]
+        Net --> Z["Shared Latent State z_t ∈ ℝ⁶⁴"]
     end
 
-    subgraph Head1["Head 1: Signal Reconstruction (The Virtual Sensor)"]
-        Z --> Regressor["Regression Dense Layers"]
-        Regressor --> Out_Y["Clean Sensor Signals ŷ_t ∈ ℝ¹⁴<br/>(Physical Units: Kelvin, Pascals, RPM)"]
+    subgraph Heads["2. Dual Dedicated Heads"]
+        Z --> H1["Head 1: Signal Reconstruction<br/>(Virtual Sensor Denoising)"]
+        Z --> H2["Head 2: Diagnostic FDI<br/>(Multi-Label Fault Classifier)"]
+        
+        H1 --> Y_hat["Clean Signals ŷ_t ∈ ℝ¹⁴<br/>(Kelvin, Pascals, RPM)"]
+        H2 --> P_vec["Fault Probabilities p_t ∈ [0, 1]¹⁴<br/>(e.g., T030: 98.2%, NL: 1.1%)"]
     end
 
-    subgraph Head2["Head 2: Diagnostic FDI (The Inspector)"]
-        Z --> Classifier["Classification Dense Layers + Sigmoid"]
-        Classifier --> Out_P["Fault Probability Vector p_t ∈ [0, 1]¹⁴<br/>(e.g., [T030: 98.4%, NL: 1.2%, ...])"]
-    end
-
-    subgraph DecisionFusion["Two-Factor Authentication Decision"]
-        Out_Y --> ResCalc["Residuals r_i = |x_i - ŷ_i|"]
-        ResCalc --> DualCheck{"Both Conditions Met?<br/>(1) p_i > 0.5 (AI is confident)<br/>AND<br/>(2) r_i > τ_i (Physics disagrees)"}
-        Out_P --> DualCheck
-        DualCheck -- "YES to Both" --> Confirmed["CONFIRMED COCKPIT ALARM<br/>• 0% False Positives<br/>• Isolated Sensor: T030"]
-        DualCheck -- "NO" --> Suppress["Suppressed as Noise / Transient"]
+    subgraph Fusion["3. Adaptive Decision Fusion (Two-Factor Authentication)"]
+        Y_hat --> ResCalc["Residuals r_i = |x_i - ŷ_i| / σ_i"]
+        ResCalc --> DualCheck{"Adaptive Trigger:<br/>r_i > τ_adaptive(p_i) ?"}
+        P_vec --> DualCheck
+        
+        DualCheck -- "Yes" --> Confirmed["CONFIRMED FAULT ALARM<br/>• Zero false alarms on noise spikes<br/>• Low latency on subtle drifts<br/>• Replaces broken signal with ŷ_i"]
+        DualCheck -- "No" --> Suppress["Suppressed as Transient Noise Spike"]
     end
 ```
 
-#### 1. How the Two Heads Work
-* **Shared Backbone ($\mathbf{z}_t = \text{Backbone}(\mathbf{x}_t)$)**:
-  Acts as the central processing unit. It reads the 18 inputs (or a sliding window of the last 30 flight cycles) and transforms them into an expressive feature vector $\mathbf{z}_t$.
+### Head 1: Continuous Signal Reconstruction
+```math
+\hat{\mathbf{y}}_t = g_{\text{recon}}(\mathbf{z}_t) \in \mathbb{R}^{14}
+```
+* **In Plain English**: A dense regression network that translates the shared latent state into continuous physical sensor measurements.
 
-* **Head 1: Continuous Signal Reconstruction**:
-  $$\hat{\mathbf{y}}_t = g_{\text{recon}}(\mathbf{z}_t) \in \mathbb{R}^{14}$$
-  Focuses on **continuous regression**: estimating exact physical sensor values in Pascals, Kelvin, and RPM.
-
-* **Head 2: Discrete Fault Classification**:
-  $$\mathbf{p}_t = \sigma\left( g_{\text{diag}}(\mathbf{z}_t) \right) \in [0, 1]^{14}$$
-  Focuses on **pattern recognition**: outputting 14 independent probabilities between $0.0$ ($0\%$) and $1.0$ ($100\%$) indicating whether each sensor displays the distinct signature of a drift or step fault.
-
-#### 2. The "Two-Factor Authentication" of FDI
-By pairing both heads together, TurbofanGuard implements a fail-safe verification rule:
-
-$$\text{Trigger Alarm on Sensor } i \iff (p_{t, i} > 0.5) \quad \mathbf{AND} \quad (r_{t, i} > \tau_i)$$
-
-* **Scenario A: A Random Single-Cycle Noise Spike**:
-  The residual $r_i$ might briefly exceed $\tau_i$ for one second. But Head 2 looks at the temporal pattern and outputs $p_i = 0.04$ (not a real fault). **Result: Alarm suppressed, zero false positive.**
-* **Scenario B: A Real Developing Sensor Drift**:
-  Head 2 spots the persistent upward slope early and outputs $p_i = 0.96$. As the residual passes $\tau_i$, **both conditions match immediately**. **Result: Confirmed alarm with near-zero latency.**
-
-#### 3. Why Training Both Together (Joint Multi-Task Loss) is Magic
-In machine learning, training two related tasks on a shared backbone creates **Inductive Transfer** (each task helps the other learn better):
-
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{recon}} + \lambda \cdot \mathcal{L}_{\text{FDI}}$$
-
-* **Reconstruction Loss ($\mathcal{L}_{\text{recon}}$)** anchors the network to physical reality. It prevents the diagnostic classifier from memorizing superficial noise.
-* **FDI Classification Loss ($\mathcal{L}_{\text{FDI}}$)** sharpens the backbone's sensitivity to subtle fault onsets.
-* **$\lambda$ (Balance Factor)**: Balances the loss scales so neither regression nor classification dominates gradient descent.
+### Head 2: Multi-Label Fault Classification
+```math
+\mathbf{p}_t = \sigma\left( g_{\text{diag}}(\mathbf{z}_t) \right) \in [0, 1]^{14}
+```
+* **In Plain English**: A dense classification network followed by a Sigmoid function (sigma) that outputs 14 independent probabilities between 0% and 100%, indicating the AI's confidence that each sensor has suffered a fault.
 
 ---
 
-### Step 1 vs. Step 2: Clear Comparison Table
+## 7. Adaptive Thresholding: "Two-Factor Authentication" for Alarms
 
-| Attribute | Step 1: Baseline Autoencoder | Step 2: Dual-Head Multi-Task Network |
-| :--- | :--- | :--- |
-| **Model Type** | Self-Supervised Denoising Regressor | Multi-Task Deep Neural Network |
-| **Training Labels Needed** | Clean sensor truth only (`*_truth`). **No fault labels needed.** | Clean sensor truth (`*_truth`) + Fault labels (`fault_on` / `family_id`). |
-| **Datasets Used for Training** | `DS02` (variable conditions) & `DS01`. | `DS02` (nominal) + `DS03` (single fault families). |
-| **Datasets Used for Testing** | Tested on `DS03` & `DS04`. | Tested on unseen multi-fault engines in `DS04`. |
-| **Fault Detection Mechanism** | Physical residual thresholding ($r_i > \tau$). | Dual verification: $(p_i > 0.5) \land (r_i > \tau)$. |
-| **Handling of Multi-Faults** | Good on double faults; can degrade on triple faults. | **Best-in-class**: Explicitly trained to separate concurrent fault modes. |
-| **Interpretability** | **Extremely high**: Every alarm is backed by a physical residual curve in Kelvin or Pascals. | **Very high**: Provides both the physical residual curve AND an AI confidence score. |
+Instead of relying on a rigid, static threshold, TurbofanGuard introduces **Adaptive Residual Thresholding**:
 
----
-
-
-## 4. How the 4 Dataset Suites (DS01–DS04) Fit Together
-
-We do **not** train separate models for each suite. Instead, the 4 suites form a **Curriculum Learning & Benchmarking Lifecycle**:
-
-```mermaid
-flowchart TD
-    subgraph Phase1["Stage 1: Training Foundation"]
-        DS02["DS02: Variable Conditions, Nominal Wear<br/><i>(Primary Training Set)</i>"]
-        DS01["DS01: Fixed Conditions<br/><i>(Architecture Prototyping)</i>"]
-    end
-
-    subgraph Model["Unified TurbofanGuard Model"]
-        Net["TurbofanGuard Core Network<br/>(18 Inputs → 14 Outputs)"]
-    end
-
-    subgraph Phase2["Stage 2: Benchmark & Evaluation"]
-        DS03["DS03: Single Sensor Faults<br/>(14 Drifts, 14 Steps)<br/><i>Evaluate Single-Sensor FDI</i>"]
-        DS04["DS04: Multi-Sensor Faults<br/>(Double & Triple Faults)<br/><i>Stress Test Multi-Sensor FDI</i>"]
-    end
-
-    DS02 --> Net
-    DS01 -.-> Net
-    Net --> DS03
-    Net --> DS04
+```math
+\tau_{\text{adaptive}}(p_{t, i}) = \tau_{\text{high}} - (\tau_{\text{high}} - \tau_{\text{low}}) \cdot p_{t, i}
 ```
 
-### Dataset Suite Progression Table
+* **In Plain English**: The threshold required to trigger an alarm automatically adapts based on AI confidence:
+  * When the AI sees no pattern (probability near 0%), the threshold stays very high (tau_high = 4.5 sigma).
+  * When the AI recognizes a multi-cycle drift trend (probability approaching 100%), the threshold smoothly drops to a sensitive level (tau_low = 2.0 sigma).
+* **Variables**:
+  * `tau_adaptive`: Dynamic threshold for sensor i at cycle t.
+  * `tau_high`: High conservative threshold (e.g., 4.5 sigma).
+  * `tau_low`: Low sensitive threshold (e.g., 2.0 sigma).
+  * `p_{t, i}`: AI diagnostic probability for sensor i.
 
-| Suite | Operating Conditions | Fault Modes Present | Engine Count | Role in Strategy |
-| :--- | :--- | :--- | :--- | :--- |
-| **`DS01`** | Fixed (ALT=10,668m, XM=0.78) | None (Noise + degradation only) | 200 | **Prototyping Baseline**: Unit test to verify network convergence without condition variance. |
-| **`DS02`** | **Variable** (ALT, Mach, EPR fluctuate) | None (Noise + degradation only) | 200 | **Core Training Engine**: Teaches the model healthy aerodynamics and physics across the entire flight envelope. |
-| **`DS03`** | **Variable** | **Single Faults** (14 drift families, 14 step families) | 560 | **Primary FDI Benchmark**: Validates single-fault detection rate, isolation precision, and latency. |
-| **`DS04`** | **Variable** | **Multi-Faults** (Double/triple simultaneous faults) | 704 | **Generalization Stress Test**: Evaluates whether the model isolates multiple broken sensors without cross-talk. |
+```math
+\text{Trigger Alarm on Sensor } i \iff r_{t, i} > \tau_{\text{adaptive}}(p_{t, i})
+```
+
+```text
+Scenario A: An electrical noise spike hits a healthy sensor
+   • Physical Residual spikes momentarily: r_i = 3.8
+   • AI Diagnostic Head inspects sequence window: No drift trend detected! p_i = 0.05
+   • Dynamic Threshold stays high: tau_adaptive = 4.5 - (4.5 - 2.0) * 0.05 = 4.38
+   • Decision: 3.8 < 4.38 ──> ALARM SUPPRESSED! (Zero false alarms on noise!)
+
+Scenario B: A subtle drift begins developing on sensor T030
+   • Flight 1 to 10: Drift slowly climbs: r_i = 2.2
+   • AI Diagnostic Head spots multi-cycle trend: p_i = 0.90
+   • Dynamic Threshold relaxes: tau_adaptive = 4.5 - (4.5 - 2.0) * 0.90 = 2.25
+   • By Flight 11: r_i reaches 2.3 > 2.25 ──> CONFIRMED ALARM!
+   • Result: Caught 25 flights earlier than a static 4.5 threshold!
+```
 
 ---
 
-## 5. Performance Evaluation Metrics
+## 8. Joint Multi-Task Loss Formulation
 
-To rigorously assess TurbofanGuard, we report standard aerospace metrics:
+During training of Step 2, the neural network learns to optimize both tasks at once using a combined loss function:
 
-### 1. Denoising & Reconstruction Metrics
+```math
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{recon}} + \lambda \cdot \mathcal{L}_{\text{FDI}}
+```
+
+* **In Plain English**: The overall training loss adds the physics reconstruction error to the fault classification error, balanced by a weighting knob lambda.
+* **Variables**:
+  * `L_total`: Total multi-task loss minimized by the optimizer.
+  * `L_recon`: Reconstruction loss (penalizes inaccurate virtual sensor values).
+  * `L_FDI`: Classification loss (penalizes missed faults or false alarms).
+  * `lambda`: Hyperparameter balancing the two loss scales (typically lambda between 0.1 and 1.0).
+
+### The Classification Loss
+Because flights with sensor faults are rare compared to healthy flights (class imbalance), we use **Weighted Multi-Label Binary Cross-Entropy**:
+
+```math
+\mathcal{L}_{\text{FDI}} = -\frac{1}{14} \sum_{i=1}^{14} \left[ w_{\text{pos}} \cdot m_{t, i} \log(p_{t, i}) + (1 - m_{t, i}) \log(1 - p_{t, i}) \right]
+```
+
+* **In Plain English**: Standard cross-entropy, but missing a real fault is penalized w_pos times more severely than a false alarm.
+* **Variables**:
+  * `m_{t, i}`: Ground-truth label for sensor i (1 if broken, 0 if healthy).
+  * `p_{t, i}`: Predicted fault probability for sensor i.
+  * `w_pos`: Positive class weight multiplier (typically 5.0 to 10.0).
+  * `log`: Natural logarithm.
+
+---
+
+## 9. Performance Evaluation Metrics
+
+To rigorously evaluate TurbofanGuard against aerospace industry standards, we use six quantitative metrics:
+
+### 1. Denoising Accuracy (RMSE & MAPE)
 * **Root Mean Squared Error (RMSE)**:
-  $$\text{RMSE}_i = \sqrt{\frac{1}{N} \sum_{t=1}^N (\hat{y}_{t, i} - y_{t, i}^*)^2}$$
-* **Mean Absolute Percentage Error (MAPE)**: Physical reconstruction accuracy in engineering units.
+```math
+\text{RMSE}_i = \sqrt{\frac{1}{N} \sum_{t=1}^N (\hat{y}_{t, i} - y_{t, i}^*)^2}
+```
+Measures average reconstruction error in real physical units (Kelvin, Pascals, RPM).
 
-### 2. Fault Detection & Isolation (FDI) Metrics
-* **False Alarm Rate (FAR / FPR)**: Percentage of false alarms raised during healthy cycles ($t < t_{\text{start}}$). Target: $< 1.0\%$.
-* **True Positive Rate (TPR / Recall)**: Percentage of true faults detected ($t \ge t_{\text{start}}$). Target: $> 95\%$.
-* **Detection Latency ($\Delta t_{\text{det}}$)**:
-  $$\Delta t_{\text{det}} = t_{\text{first\_alarm}} - t_{\text{fault\_start}}$$
-  *(Measures how many flight cycles elapse before a subtle drift is caught).*
-* **Isolation Accuracy**:
-  $$\text{Acc}_{\text{iso}} = \frac{\text{Correctly Identified Faulty Sensor}}{\text{Total Injected Faults}}$$
+* **Mean Absolute Percentage Error (MAPE)**:
+```math
+\text{MAPE}_i = \frac{100\%}{N} \sum_{t=1}^N \left| \frac{\hat{y}_{t, i} - y_{t, i}^*}{y_{t, i}^*} \right|
+```
+Measures virtual sensor error as a clean, intuitive percentage (e.g. 0.3% error).
 
----
+### 2. Detection Reliability (FAR & TPR)
+* **False Alarm Rate (FAR)**:
+```math
+\text{FAR} = \frac{\text{False Alarms Triggered on Healthy Flights}}{\text{Total Healthy Flight Cycles Evaluated}} \quad (\text{Target: } < 1.0\%)
+```
+In commercial aviation, false alarms must stay strictly below 1.0% to avoid ground delays and unnecessary part replacements.
 
-## 6. Summary Roadmap for Implementation
+* **True Positive Rate (TPR / Recall)**:
+```math
+\text{TPR} = \frac{\text{Successfully Detected Fault Cycles}}{\text{Total Active Fault Cycles}} \quad (\text{Target: } > 95\%)
+```
+Ensures that at least 95% of active sensor faults are successfully caught.
 
-1. **Phase 2 (Completed)**: Clean data normalization pipeline ([src/data/scaler.py](file:///Users/atulyasharan/Documents/TurbofanGuard/src/data/scaler.py)) using `StandardScaler` and explicit whitelists.
-2. **Phase 3**: PyTorch `TurbofanDataset` and batch loaders ([src/data/dataset.py](file:///Users/atulyasharan/Documents/TurbofanGuard/src/data/dataset.py)).
-3. **Phase 4**: Step 1 Baseline Model: Autoencoder / Denoising Regressor ([src/models/baseline_ae.py](file:///Users/atulyasharan/Documents/TurbofanGuard/src/models/)).
-4. **Phase 5**: Residual FDI evaluation script on `DS03` test set ([scripts/evaluate_fdi.py](file:///Users/atulyasharan/Documents/TurbofanGuard/scripts/)).
-5. **Phase 6**: Step 2 Dual-Head Multi-Task Network ([src/models/dual_head_fdi.py](file:///Users/atulyasharan/Documents/TurbofanGuard/src/models/)) tested against `DS04`.
+### 3. Detection Latency
+```math
+\Delta t_{\text{det}} = t_{\text{alarm}} - t_{\text{fault\_start}}
+```
+Measures how many flight cycles elapse between the moment a sensor begins failing and the moment the alarm triggers (lower is better).
+
+### 4. Multi-Sensor Accuracy (Hamming Loss & Subset Accuracy)
+* **Exact Match Ratio (Subset Accuracy)**:
+```math
+\text{Subset Accuracy} = \frac{1}{N} \sum_{t=1}^N \mathbb{I}(\hat{\mathbf{m}}_t = \mathbf{m}_t)
+```
+The percentage of flight cycles where all 14 sensors are simultaneously diagnosed 100% correctly.
+
+* **Hamming Loss**:
+```math
+\text{Hamming Loss} = \frac{1}{14 \cdot N} \sum_{t=1}^N \sum_{i=1}^{14} \mathbb{I}(\hat{m}_{t, i} \ne m_{t, i})
+```
+Evaluates average per-sensor error on DS04. A Hamming loss of 0.02 means that 98% of all individual sensor diagnostic flags were correct.
