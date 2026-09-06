@@ -9,7 +9,8 @@ This guide provides practical instructions on how the codebase is organized, how
 ```text
 TurbofanGuard/
 ├── configs/                          # Hyperparameter configuration JSON files
-│   └── backbone_config.json          # Architecture settings for the shared backbone
+│   ├── backbone_config.json          # Architecture settings for the shared backbone
+│   └── dual_head_config.json         # Architecture settings for Step 2 Dual-Head network
 ├── docs/                             # Full documentation suite
 │   ├── README.md                     # Documentation hub and glossary
 │   ├── dataset_and_pipeline.md       # Dataset guide, 18D inputs, 14D targets, data audit
@@ -21,15 +22,26 @@ TurbofanGuard/
 │   ├── audit_data_integrity.py       # Scans all splits for nulls, disjointness, continuity
 │   ├── test_reader.py                # Tests Parquet loading and column partitioning
 │   ├── test_scaler.py                # Tests zero-leakage scaling and inverse transform
-│   └── test_backbone.py              # Tests neural backbone forward pass, gradients, and MPS
+│   ├── test_backbone.py              # Tests neural backbone forward pass, gradients, and MPS
+│   ├── test_baseline_ae.py           # Tests Step 1 baseline autoencoder
+│   ├── evaluate_baseline_fdi.py      # Evaluates Step 1 baseline on DS03
+│   ├── test_dual_head.py             # Tests Step 2 dual-head architecture and adaptive logic
+│   └── evaluate_dual_head_fdi.py     # Evaluates Step 2 and benchmarks against Step 1
 ├── src/                              # Core Python library
 │   ├── data/
 │   │   ├── reader.py                 # Raw Parquet ingestion and column categorization
-│   │   └── scaler.py                 # TurbofanScaler (StandardScaler wrapper with whitelists)
+│   │   ├── scaler.py                 # TurbofanScaler (StandardScaler wrapper with whitelists)
+│   │   └── dataset.py                # TurbofanDataset (sliding windows, masking, multi-hot labels)
 │   ├── models/
-│   │   └── backbone.py               # TurbofanBackbone (PyTorch neural network)
+│   │   ├── backbone.py               # TurbofanBackbone (PyTorch neural network)
+│   │   ├── baseline_ae.py            # TurbofanBaselineAE (Step 1 virtual sensor)
+│   │   └── dual_head_fdi.py          # TurbofanDualHeadFDI (Step 2 physics + diagnostic AI)
+│   ├── training/
+│   │   ├── losses.py                 # MultiTaskFDILoss (MSE + Weighted Multi-Label BCE)
+│   │   ├── train_baseline.py         # Step 1 baseline training pipeline
+│   │   └── train_dual_head.py        # Step 2 multi-task joint training pipeline
 │   └── utils/
-│       └── config.py                 # BackboneConfig dataclass and JSON serialization
+│       └── config.py                 # BackboneConfig & DualHeadConfig dataclasses
 ├── DS01/                             # Benchmark Suite 1: Fixed cruise baseline
 ├── DS02/                             # Benchmark Suite 2: Variable flight envelope
 ├── DS03/                             # Benchmark Suite 3: Single structured sensor faults
@@ -115,8 +127,36 @@ uv run python scripts/test_backbone.py
   * Successfully processes 3D temporal sequence windows with variable lengths ($W = 10, 16, 24, 30$).
   * Successfully processes single-engine streaming windows `(1, 16, 18)`.
   * Successfully processes 2D single-snapshot inputs `(batch_size, 18)` via the fallback projection.
-  * Verifies that full backward gradient flow reaches every convolutional filter and dense weight matrix.
+  * Verifies backward gradient flow across all convolutional and dense layers.
   * Verifies hardware acceleration on Apple Silicon GPU (`MPS`) or CPU.
+
+### 5. Step 1 Baseline Autoencoder Test (`scripts/test_baseline_ae.py`)
+Verifies `TurbofanBaselineAE` forward geometry, parameter count (< 100k), and static threshold residual FDI.
+
+```bash
+uv run python scripts/test_baseline_ae.py
+```
+
+### 6. Step 1 Baseline Evaluation on DS03 (`scripts/evaluate_baseline_fdi.py`)
+Evaluates the trained virtual sensor on single-fault flights (`DS03` test set) using static residual thresholding.
+
+```bash
+uv run python scripts/evaluate_baseline_fdi.py
+```
+
+### 7. Step 2 Dual-Head Architecture Test (`scripts/test_dual_head.py`)
+Verifies `TurbofanDualHeadFDI` forward pass, `MultiTaskFDILoss` computation, simultaneous two-head gradient flow, and Two-Factor Authentication logic.
+
+```bash
+uv run python scripts/test_dual_head.py
+```
+
+### 8. Step 2 Dual-Head FDI Evaluation (`scripts/evaluate_dual_head_fdi.py`)
+Evaluates the dual-head multi-task model on `DS03` and `DS04` test sets, printing comparative benchmark metrics directly against Step 1.
+
+```bash
+uv run python scripts/evaluate_dual_head_fdi.py --suite DS03 --split test
+```
 
 ---
 
@@ -124,54 +164,46 @@ uv run python scripts/test_backbone.py
 
 Hyperparameters are decoupled from model code using typed Python dataclasses and portable JSON files.
 
-### Configuration File (`configs/backbone_config.json`)
-```json
-{
-  "input_dim": 18,
-  "window_length": 16,
-  "conv_channels": [32, 64],
-  "kernel_sizes": [3, 5],
-  "dense_hidden_dims": [128, 64],
-  "latent_dim": 64,
-  "dropout": 0.1,
-  "activation": "gelu"
-}
-```
+### Configuration Files
+* **Backbone Configuration (`configs/backbone_config.json`)**:
+  Defines input dimensions, temporal sequence length $W$, multi-scale 1D CNN channels, kernel sizes, and latent bottleneck dimension (64D).
+* **Dual-Head Multi-Task Configuration (`configs/dual_head_config.json`)**:
+  Defines Head 1 and Head 2 layer dimensions, joint loss weighting ($\lambda$), positive fault class weighting (`pos_weight`), and adaptive threshold boundaries ($\tau_{\text{high}} = 4.5\sigma$, $\tau_{\text{low}} = 2.0\sigma$).
 
 ### Programmatic Usage in Python
 ```python
-from src.utils.config import BackboneConfig
-from src.models.backbone import TurbofanBackbone
+from src.utils.config import BackboneConfig, DualHeadConfig
+from src.models.dual_head_fdi import TurbofanDualHeadFDI
 
 # 1. Load configuration from JSON
-config = BackboneConfig.from_json("configs/backbone_config.json")
+config = DualHeadConfig.from_json("configs/dual_head_config.json")
 
-# 2. Modify a hyperparameter safely (with automatic validation)
-experiment_config = config.copy_with(latent_dim=128, dropout=0.2)
+# 2. Modify hyperparameters safely with automatic validation
+experiment_config = config.copy_with(pos_weight=8.0, lambda_fdi=0.6)
 
 # 3. Instantiate model with config
-model = TurbofanBackbone(config=experiment_config)
+model = TurbofanDualHeadFDI(config=experiment_config)
 ```
 
-If an engineer accidentally inputs an invalid hyperparameter (e.g. `dropout = 1.5` or `activation = "invalid"`), `BackboneConfig.validate()` raises a clear `ValueError` immediately, preventing silent failures during long training runs.
+If an engineer accidentally inputs an invalid hyperparameter (e.g. `tau_low >= tau_high` or `dropout = 1.5`), validation immediately raises a descriptive `ValueError`.
 
 ---
 
-## 5. Next Steps for Contributors
+## 5. Architectural Progression & Status
 
-The foundational data ingestion, scaling, and backbone architecture are complete and 100% verified. The immediate next milestones are:
+1. **PyTorch Dataset & DataLoader (`src/data/dataset.py`)** - [COMPLETE]
+   * Sliding temporal sequence window slicing across 200-cycle trajectories.
+   * Training-time random channel masking augmentation.
+   * Dynamic multi-hot ground truth matrix ($\mathbf{m}_t$) supporting `DS01` through `DS04`.
 
-1. **PyTorch Dataset & DataLoader (`src/data/dataset.py`)**:
-   * Build a PyTorch `Dataset` that slices continuous 200-cycle engine trajectories into sliding windows of length $W$.
-   * Include random channel masking augmentation on input sensors during training.
-   * Dynamically build the multi-hot isolation ground truth ($\mathbf{m}_t$) by joining Parquet flags with `engine_manifest.csv`.
+2. **Step 1 Baseline Autoencoder (`src/models/baseline_ae.py`)** - [COMPLETE]
+   * Virtual sensor reconstruction decoder attached to shared backbone.
+   * Trained on healthy flights (`DS02`), achieving 0.21% physical MAPE.
+   * Benchmarked static residual thresholding on single-fault `DS03`.
 
-2. **Step 1 Baseline Autoencoder (`src/models/baseline_ae.py`)**:
-   * Attach a reconstruction decoder head to the backbone.
-   * Train on nominal flights (`DS02`).
-   * Evaluate static residual thresholding on single-fault `DS03` flights.
+3. **Step 2 Dual-Head Multi-Task Network (`src/models/dual_head_fdi.py`)** - [COMPLETE]
+   * Parallel Head 1 (Physics Reconstruction) and Head 2 (Diagnostic Classifier).
+   * Joint multi-task loss ($\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{recon}} + \lambda \mathcal{L}_{\text{FDI}}$).
+   * Two-Factor Authentication with adaptive thresholding ($\tau_{\text{adaptive}}$).
+   * Comparative evaluation against Step 1 baseline.
 
-3. **Step 2 Dual-Head Multi-Task Network (`src/models/dual_head_fdi.py`)**:
-   * Attach both Head 1 (Reconstruction) and Head 2 (Diagnostic Classifier).
-   * Train with the joint loss ($\mathcal{L}_{\text{recon}} + \lambda \mathcal{L}_{\text{FDI}}$).
-   * Implement adaptive thresholding and benchmark on multi-fault `DS04` flights.
