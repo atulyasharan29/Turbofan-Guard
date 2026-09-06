@@ -17,35 +17,14 @@ If a flight computer trusts a damaged sensor, it might throttle the engine incor
 
 **TurbofanGuard solves this problem.** It acts as an on-wing **Digital Twin** (a virtual computer model that knows exactly how a healthy jet engine should behave). It continuously checks all sensor readings, detects when something goes wrong, identifies which sensor is at fault, and estimates what the true, clean numbers should be.
 
-```mermaid
-flowchart LR
-    subgraph Inputs["1. Engine Telemetry"]
-        Raw["Raw Sensor Signals<br/>+ Flight Conditions (18 Features)<br/>(May have noise, spikes, or faults)"]
-    end
-
-    subgraph TurbofanGuard["2. TurbofanGuard System"]
-        BB["Neural Backbone<br/>(Reads engine dynamics over time)"]
-        H1["Virtual Sensor (Reconstruction)<br/>(Calculates true physics)"]
-        H2["Diagnostic AI (Isolation)<br/>(Calculates fault probabilities)"]
-        Fusion["Adaptive Decision Fusion<br/>(Combines physics + AI)"]
-        
-        BB --> H1
-        BB --> H2
-        H1 --> Fusion
-        H2 --> Fusion
-    end
-
-    subgraph Outputs["3. Actionable Outputs"]
-        Clean["Clean Denoised Signals (14 Channels)<br/>(Replaces bad sensor readings)"]
-        Alarm["Fault Alarms<br/>(Zero false alarms from noise)"]
-        Identify["Faulty Sensor Identified<br/>(e.g., 'T030 temperature sensor broken')"]
-        
-        Fusion --> Clean
-        Fusion --> Alarm
-        Fusion --> Identify
-    end
-
-    Raw --> BB
+```text
++-----------------------------------+      +-----------------------------------------+      +------------------------------------+
+| 1. Engine Telemetry               | ---> | 2. TurbofanGuard System                 | ---> | 3. Actionable Outputs              |
+| • 4 Flight Conditions (ALT, Mach) |      | • Neural Backbone (Extracts dynamics)   |      | • Clean Denoised Signals (14 chan) |
+| • 14 Raw Sensor Signals           |      | • Virtual Sensor (Reconstruction Head)  |      | • Confirmed Alarms (Zero noise)    |
+| (May have noise, spikes, faults)  |      | • Diagnostic AI (FDI Isolation Head)    |      | • Exact Broken Sensor Identified   |
++-----------------------------------+      | • Adaptive Fusion (Combines both)       |      +------------------------------------+
+                                           +-----------------------------------------+
 ```
 
 ---

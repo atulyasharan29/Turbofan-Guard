@@ -16,23 +16,15 @@ In an aircraft jet engine, physical sensors measure completely different physica
 | **`WFE`** (Fuel Flow) | Mass Flow ($\text{kg/s}$) | $\approx 0.3 \text{ to } 1.5 \text{ kg/s}$ |
 | **`XM`** (Airspeed) | Mach Number (Ratio) | $\approx 0.75 \text{ to } 0.82$ |
 
-```mermaid
-flowchart TD
-    subgraph Problem["The Raw Data Problem"]
-        P["Pressure: 100,000 Pa<br/>(Huge number)"]
-        M["Mach Number: 0.78<br/>(Tiny number)"]
-        P --> NN1["Neural Network Weight Updates"]
-        M --> NN1
-        NN1 --> Unstable["Gradients Explode on Pressure!<br/>Mach Number is Completely Ignored!"]
-    end
+```text
+WITHOUT SCALING (THE RAW DATA PROBLEM):
+  • Pressure: 100,000 Pa (huge magnitude) ──> Gradients explode on pressure!
+  • Mach Speed: 0.78 (tiny magnitude)     ──> Mach number is completely ignored!
 
-    subgraph Solution["The TurbofanScaler Solution"]
-        ScaledP["Scaled Pressure: Mean=0, Std=1<br/>(Between -2.0 and +2.0)"]
-        ScaledM["Scaled Mach: Mean=0, Std=1<br/>(Between -2.0 and +2.0)"]
-        ScaledP --> NN2["Neural Network Weight Updates"]
-        ScaledM --> NN2
-        NN2 --> Stable["Balanced, Stable Learning!<br/>Every Sensor Has an Equal Voice!"]
-    end
+WITH TURBOFANSCALER (THE SOLUTION):
+  • Scaled Pressure: Mean = 0.0, Std = 1.0 (between -2.0 and +2.0)
+  • Scaled Mach:     Mean = 0.0, Std = 1.0 (between -2.0 and +2.0)
+  ──> Balanced, stable gradient learning where every physical sensor has an equal voice!
 ```
 
 ### What Happens Without Scaling?

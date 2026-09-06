@@ -2,29 +2,13 @@
 
 **TurbofanGuard** is a deep learning system for aircraft jet engines designed to detect faulty sensors, isolate which sensors are broken, and reconstruct clean physical readings in real time under flight variability and engine degradation.
 
-```mermaid
-flowchart LR
-    subgraph Inputs["1. Telemetry Stream"]
-        Raw["18 Features<br/>• 4 Flight Conditions<br/>• 14 Raw Sensors"]
-    end
-
-    subgraph Core["2. TurbofanGuard Core"]
-        BB["Neural Backbone (57k params)<br/>(Multi-Scale 1D CNN + Pooling)"]
-        H1["Virtual Sensor (Reconstruction)"]
-        H2["Diagnostic AI (FDI Isolation)"]
-        BB --> H1
-        BB --> H2
-    end
-
-    subgraph Outputs["3. Operational Outputs"]
-        Y["Clean Signals (14 Channels)"]
-        Alarm["Zero-Noise-Spike Alarms"]
-        Iso["Broken Sensor Isolated"]
-        H1 --> Y
-        H1 & H2 --> Alarm & Iso
-    end
-
-    Raw --> BB
+```text
++-----------------------+      +-----------------------------------------+      +----------------------------------------+
+| 1. Telemetry Stream   | ---> | 2. TurbofanGuard Core                   | ---> | 3. Operational Outputs                 |
+| • 4 Flight Conditions |      | • Neural Backbone (57k params)          |      | • Clean Signals (14 channels)          |
+| • 14 Raw Sensors      |      | • Virtual Sensor (Reconstruction Head)  |      | • Zero-Noise-Spike Fault Alarms        |
++-----------------------+      | • Diagnostic AI (FDI Isolation Head)    |      | • Exact Broken Sensor Identified       |
+                               +-----------------------------------------+      +----------------------------------------+
 ```
 
 ## Quick Links to Documentation

@@ -8,14 +8,21 @@ This document explains the deep learning architecture of the **Shared Neural Bac
 
 In modern multi-task deep learning, instead of training several independent models that each try to understand the engine from scratch, we build a **single shared backbone** (an "Engine Brain").
 
-```mermaid
-flowchart TD
-    In["Telemetry Input<br/>• Single Snapshot: (B, 18)<br/>• Or Temporal Window: (B, W, 18)"] --> Backbone["TurbofanBackbone<br/>(The Engine Brain — 57,664 parameters)<br/>• Multi-scale 1D Convolutions (k=3, k=5)<br/>• Temporal Pooling (Endpoint + Mean)<br/>• Residual Dense Layers + LayerNorm"]
-    
-    Backbone --> Latent["Shared Latent State z_t ∈ ℝ⁶⁴<br/>(A pure, compressed 64D summary of engine physics)"]
-    
-    Latent --> H1["Head 1: Signal Reconstruction<br/>(Estimates clean sensor values)"]
-    Latent --> H2["Head 2: Diagnostic FDI<br/>(Estimates fault probabilities)"]
+```text
+Telemetry Input (B, 16, 18)
+          │
+          ▼
+TurbofanBackbone (57,664 params — 'The Engine Brain')
+• Multi-scale 1D Convolutions (k=3, k=5)
+• Dual Temporal Pooling (Endpoint + Mean)
+• Residual Dense Layers + LayerNorm
+          │
+          ▼
+Shared Latent State z_t ∈ ℝ⁶⁴ (Pure, compressed 64D engine state)
+     ┌────┴──────────────────────────┐
+     ▼                               ▼
+Head 1: Virtual Sensor          Head 2: Diagnostic AI
+(Reconstructs clean sensors)    (Classifies broken sensors)
 ```
 
 * **What it does**: The backbone takes the 18 telemetry features (4 flight conditions + 14 raw sensor channels), filters out measurement noise, understands how the engine has changed over recent flights, and distills everything into a compact **64-dimensional latent state** ($\mathbf{z}_t$).
@@ -54,14 +61,16 @@ Sensor anomalies come in two very different flavors:
 
 To capture both patterns simultaneously, `TurbofanBackbone` uses **Multi-Scale 1D Temporal Convolutions** with two parallel branches:
 
-```mermaid
-flowchart LR
-    X["Input Window<br/>(B, 18, W)"] --> B1["Branch 1: Fast Kernel (k=3)<br/>Receptive Field = 3 cycles<br/>(Detects rapid spikes and abrupt steps)"]
-    X --> B2["Branch 2: Slow Kernel (k=5)<br/>Receptive Field = 5 cycles<br/>(Detects multi-cycle trends and slow drifts)"]
-    
-    B1 --> Cat["Concatenate Features (64 Channels)"]
-    B2 --> Cat
-    Cat --> Stage2["Stage 2 Convolution (k=3, 64 Channels)"]
+```text
+Input Window (B, 18, W)
+     ├──> Branch 1: Fast Kernel (k=3, 3-cycle receptive field) ──> Detects rapid spikes
+     └──> Branch 2: Slow Kernel (k=5, 5-cycle receptive field) ──> Detects multi-cycle drifts
+               │
+               ▼
+     Concatenate Features (64 Channels)
+               │
+               ▼
+     Stage 2 Convolution (k=3, 64 Channels) + GroupNorm + GELU
 ```
 
 ### The Mathematics of 1D Temporal Convolutions
@@ -93,13 +102,13 @@ A common mistake is using only a global average across the window. But if you on
 
 `TurbofanBackbone` solves this with a **Dual Temporal Aggregation strategy**:
 
-```mermaid
-flowchart TD
-    C2["Temporal Feature Map (B, 64, W)"] --> Endpoint["1. Endpoint State (Latest Flight)<br/>c2[:, :, -1] (64 Channels)<br/>'What is the engine doing right now?'"]
-    C2 --> Mean["2. Temporal Mean Pool<br/>c2.mean(dim=-1) (64 Channels)<br/>'What was the engine's average baseline?'"]
-    
-    Endpoint --> Concat["Concatenate Features<br/>(64 + 64 = 128 Channels)"]
-    Mean --> Concat
+```text
+Temporal Feature Map (B, 64, W)
+     ├──> 1. Endpoint State (Latest Flight): c2[:, :, -1] (64 channels)  ──> "What is engine doing now?"
+     └──> 2. Temporal Mean Pool:            c2.mean(dim=-1) (64 channels) ──> "What was baseline average?"
+               │
+               ▼
+     Concatenate Features: (64 + 64 = 128 Channels)
 ```
 
 ```math

@@ -8,13 +8,22 @@ This document provides a comprehensive explanation of the machine learning archi
 
 When deployed on an aircraft engine's live telemetry stream during flight, TurbofanGuard continuously solves three simultaneous operational objectives:
 
-```mermaid
-flowchart TD
-    Stream["Engine Telemetry Stream (18 Features)<br/>(4 Flight Conditions + 14 Raw Sensors)"] --> TG["TurbofanGuard Multi-Task Engine"]
-    
-    TG --> G1["Goal 1: Fault Detection<br/>'Is any sensor broken on this engine?'<br/>Output: Healthy (0) or Faulty (1)"]
-    TG --> G2["Goal 2: Fault Isolation<br/>'Which exact sensor(s) is broken?'<br/>Output: Diagnostic Flags (e.g. T030, NL)"]
-    TG --> G3["Goal 3: Signal Reconstruction (Virtual Sensing)<br/>'What should the clean sensor readings be?'<br/>Output: 14 Clean Denoised Physical Signals (K, Pa, RPM)"]
+```text
++-------------------------------------------------------------+
+| Telemetry Stream (18D: 4 Flight Conditions + 14 Raw Sensors)|
++-------------------------------------------------------------+
+                              │
+                              ▼
++-------------------------------------------------------------+
+|              TurbofanGuard Multi-Task Engine                |
++-------------------------------------------------------------+
+        │                           │                       │
+        ▼                           ▼                       ▼
++-----------------------+   +-------------------+   +--------------------+
+| Goal 1: Detection     |   | Goal 2: Isolation |   | Goal 3: Virtual    |
+| 'Is anything broken?' |   | 'Which sensor?'   |   | Sensing (Clean ŷ)  |
+| Healthy (0)/Fault (1) |   | e.g. T030, NL     |   | True K, Pa, RPM    |
++-----------------------+   +-------------------+   +--------------------+
 ```
 
 ### Goal 1: Fault Detection (Is Something Broken?)
@@ -197,19 +206,15 @@ To understand why machine learning can diagnose jet engines, consider how an air
 > * Pressures along the gas path (`P023`, `P030`, `P044`, `P050`) **must** rise in exact aerodynamic ratios.
 > * Gas temperatures (`T023`, `T030`, `T050`) **must** climb predictably.
 
-```mermaid
-flowchart LR
-    subgraph Hardware["Traditional Approach: Hardware Redundancy"]
-        H1["Physical Sensor A"]
-        H2["Physical Sensor B (Duplicate)"]
-        H3["Physical Sensor C (Triplicate)"]
-        H1 & H2 & H3 --> Vote["Majority Voting Logic<br/>(Heavy, expensive, complex wiring)"]
-    end
+```text
+TRADITIONAL APPROACH: HARDWARE REDUNDANCY
+  Sensor A + Sensor B (duplicate) + Sensor C (triplicate) ──> Majority Voting
+  • Heavy structural weight, extra wiring harnesses, higher maintenance costs.
 
-    subgraph Analytical["Modern Approach: Analytical Redundancy"]
-        S["Single Physical Sensors<br/>(Lightweight, lower cost)"] --> Twin["Digital Twin / Neural Network<br/>(Understands physics connecting all sensors)"]
-        Twin --> Detect["Fault Detected via Thermodynamic Contradiction!"]
-    end
+MODERN APPROACH: ANALYTICAL REDUNDANCY (TurbofanGuard)
+  Single Physical Sensors ──> Digital Twin (Understands thermodynamic coupling)
+  • If 13 sensors & conditions agree on 691 K, but T030 reads 740 K ──> FAULT ISOLATED!
+  • Zero duplicate hardware needed.
 ```
 
 ### Hardware Redundancy vs. Analytical Redundancy
@@ -247,29 +252,19 @@ Step 2: Dual-Head Multi-Task Network (Physics + Diagnostic AI)
 
 Step 1 trains a virtual sensor on **nominal (healthy) flights only** (`DS01` and `DS02`). It requires **zero fault labels** during training.
 
-```mermaid
-flowchart LR
-    subgraph Compression["1. Compression (Encoder)"]
-        X["Observed Telemetry x_t (18D)"] --> Enc["Encoder Layers + Masking"]
-        Enc --> Latent["Latent Bottleneck z_t (64D)<br/>(Extracts Pure Engine State)"]
-    end
+```text
+1. COMPRESSION (ENCODER):
+   Observed Telemetry x_t (18D) ──> Encoder Layers + Masking ──> Latent Bottleneck z_t (64D)
 
-    subgraph Expansion["2. Reconstruction (Decoder)"]
-        Latent --> Dec["Decoder Layers"]
-        Dec --> Y_hat["Physics Prediction ŷ_t (14D)<br/>(Clean Reconstructed Sensors)"]
-    end
+2. RECONSTRUCTION (DECODER):
+   Latent Bottleneck z_t (64D)  ──> Decoder Layers           ──> Physics Prediction ŷ_t (14D)
 
-    subgraph ResidualMath["3. Residual Comparison"]
-        X_sens["Observed Sensors x_t_sensor (14D)"] --> Minus(( - ))
-        Y_hat --> Minus
-        Minus --> Res["Normalized Residual r_i = |x_i - ŷ_i| / σ_i"]
-    end
+3. RESIDUAL COMPARISON:
+   Observed x_t (14 sensors) - Predicted ŷ_t (14 sensors)   ──> Residual r_i = |x_i - ŷ_i| / σ_i
 
-    subgraph Decision["4. Decision Logic"]
-        Res --> Thresh{"Residual r_i > Threshold τ_i ?"}
-        Thresh -- "Yes (Spike!)" --> Fault["FAULT on Sensor i!<br/>Replace x_i with ŷ_i"]
-        Thresh -- "No (Near 0)" --> Healthy["Healthy Sensor"]
-    end
+4. DECISION LOGIC:
+   • If r_i > Threshold τ_i: FAULT on Sensor i! (Drop bad reading, replace with ŷ_i)
+   • If r_i ≤ Threshold τ_i: Healthy Sensor (Normal operation)
 ```
 
 ### 1. The Information Bottleneck & Channel Masking
@@ -330,29 +325,31 @@ While Step 1 is effective, relying solely on static residual thresholds faces pr
 
 Step 2 resolves these limitations with a **Dual-Head Multi-Task Network**:
 
-```mermaid
-flowchart TD
-    subgraph Backbone["1. Shared Neural Backbone"]
-        Window["Input Sequence Window (W × 18)"] --> Net["TurbofanBackbone<br/>(Multi-scale Convolutions + Temporal Pooling)"]
-        Net --> Z["Shared Latent State z_t ∈ ℝ⁶⁴"]
-    end
-
-    subgraph Heads["2. Dual Dedicated Heads"]
-        Z --> H1["Head 1: Signal Reconstruction<br/>(Virtual Sensor Denoising)"]
-        Z --> H2["Head 2: Diagnostic FDI<br/>(Multi-Label Fault Classifier)"]
-        
-        H1 --> Y_hat["Clean Signals ŷ_t ∈ ℝ¹⁴<br/>(Kelvin, Pascals, RPM)"]
-        H2 --> P_vec["Fault Probabilities p_t ∈ [0, 1]¹⁴<br/>(e.g., T030: 98.2%, NL: 1.1%)"]
-    end
-
-    subgraph Fusion["3. Adaptive Decision Fusion (Two-Factor Authentication)"]
-        Y_hat --> ResCalc["Residuals r_i = |x_i - ŷ_i| / σ_i"]
-        ResCalc --> DualCheck{"Adaptive Trigger:<br/>r_i > τ_adaptive(p_i) ?"}
-        P_vec --> DualCheck
-        
-        DualCheck -- "Yes" --> Confirmed["CONFIRMED FAULT ALARM<br/>• Zero false alarms on noise spikes<br/>• Low latency on subtle drifts<br/>• Replaces broken signal with ŷ_i"]
-        DualCheck -- "No" --> Suppress["Suppressed as Transient Noise Spike"]
-    end
+```text
+1. SHARED NEURAL BACKBONE (THE ENGINE BRAIN):
+   Input Sequence Window (W × 18) ──> TurbofanBackbone ──> Shared Latent State z_t (64D)
+                                                                     │
+                                    ┌────────────────────────────────┴──────────────────────────────┐
+                                    ▼                                                               ▼
+2. DUAL HEADS:          Head 1: Signal Reconstruction                                   Head 2: Diagnostic FDI
+                        (Dense Layers)                                                  (Dense Layers + Sigmoid)
+                                    │                                                               │
+                                    ▼                                                               ▼
+                        Clean Signals ŷ_t ∈ ℝ¹⁴                                         Fault Probabilities p_t ∈ [0, 1]¹⁴
+                        (Kelvin, Pascals, RPM)                                          (e.g., T030: 98.2%, NL: 1.1%)
+                                    │                                                               │
+                                    └────────────────────────────────┬──────────────────────────────┘
+                                                                     ▼
+3. ADAPTIVE FUSION:                                  Compute Residuals: r_i = |x_i - ŷ_i| / σ_i
+("Two-Factor Authentication")                                        │
+                                                     Check Trigger: r_i > τ_adaptive(p_i) ?
+                                                                     │
+                                            ┌────────────────────────┴────────────────────────┐
+                                            ▼                                                 ▼
+                                     [YES: CONFIRMED ALARM]                         [NO: SUPPRESSED]
+                                     • Zero false alarms on spikes                  Transient electrical spike
+                                     • Low latency on subtle drifts                 ignored safely
+                                     • Replace faulty sensor with ŷ_i
 ```
 
 ### Head 1: Continuous Signal Reconstruction

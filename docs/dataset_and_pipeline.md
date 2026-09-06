@@ -39,19 +39,17 @@ Flight 200 ──> [Snapshot at stabilized cruise] ──> Row 200 in Parquet
 
 The benchmark is organized into four distinct suites. Each suite tests a specific challenge in sensor fault detection, progressing from simple baseline conditions to complex multi-sensor failures.
 
-```mermaid
-flowchart TD
-    DS01["DS01: Fixed Cruise Baseline<br/>• Fixed altitude, Mach, and throttle<br/>• Noise and degradation only (No sensor faults)<br/>• 200 engines (40,000 total cycles)"]
-    
-    DS02["DS02: Variable Flight Envelope<br/>• Fluctuating altitude, Mach, and throttle<br/>• Noise and degradation only (No sensor faults)<br/>• 200 engines (40,000 total cycles)"]
-    
-    DS03["DS03: Single Structured Sensor Faults<br/>• Variable flight conditions<br/>• Exactly 1 sensor failure per engine<br/>• 28 fault families (560 engines, 112,000 cycles)"]
-    
-    DS04["DS04: Concurrent Multi-Sensor Faults<br/>• Variable flight conditions<br/>• 2 or 3 simultaneous sensor failures<br/>• 64 fault families (704 engines, 140,800 cycles)"]
-
-    DS01 -->|"Add variable weather & flight conditions"| DS02
-    DS02 -->|"Inject single sensor failures"| DS03
-    DS03 -->|"Inject simultaneous multiple sensor failures"| DS04
+```text
+DS01: Fixed Cruise Baseline (No Faults, Fixed Flight Conditions)
+  │
+  ▼ [Add variable altitude, speed, weather & throttle]
+DS02: Variable Flight Envelope (No Faults, Full Flight Variability)
+  │
+  ▼ [Inject 1 structured sensor fault per flight trajectory]
+DS03: Single Structured Sensor Faults (28 Fault Families)
+  │
+  ▼ [Inject combinations of 2 or 3 simultaneous sensor faults]
+DS04: Concurrent Multi-Sensor Faults (64 Fault Families)
 ```
 
 ### Detailed Suite Breakdown
@@ -69,32 +67,16 @@ flowchart TD
 
 Each flight snapshot contains up to 47 columns. In TurbofanGuard, we categorize these columns into five distinct functional groups.
 
-```mermaid
-flowchart LR
-    subgraph AllColumns["All Table Columns"]
-        C["Operating Conditions (4)<br/>ALT, XM, DTISA, EPR"]
-        S_obs["Observed Sensors (14)<br/>*_obs channels"]
-        S_tru["Clean Targets (14)<br/>*_truth channels"]
-        H["Health Indices (10)<br/>DETA*, CW*"]
-        M["Identifiers & Metadata (5)<br/>engine_id, cycle, etc."]
-    end
-
-    subgraph Inputs["Model Input Vector (18D)"]
-        X["18 Telemetry Features"]
-    end
-
-    subgraph Targets["Training Supervision (14D)"]
-        Y["14 Clean Ground Truths"]
-    end
-
-    subgraph Isolated["Strictly Isolated (Prevent Leakage)"]
-        Secret["Internal Degradation States<br/>(NEVER fed to model)"]
-    end
-
-    C --> X
-    S_obs --> X
-    S_tru --> Y
-    H --> Secret
+```text
++-----------------------------------------------------------------------------------------------+
+|                                      ALL TABLE COLUMNS                                        |
++-----------------------------------------------------------------------------------------------+
+| • 4 Conditions (ALT, XM, DTISA, EPR)    ──> MODEL INPUT VECTOR (18D: Fed to Neural Network)   |
+| • 14 Observed Sensors (*_obs)           ──> MODEL INPUT VECTOR (18D: Fed to Neural Network)   |
+| • 14 Clean Targets (*_truth)            ──> TRAINING SUPERVISION (14D: Clean Physics Truth)   |
+| • 10 Health Indices (DETA*, CW*)        ──> STRICTLY ISOLATED (Excluded to Prevent Leakage)   |
+| • 5 Identifiers (engine_id, cycle, etc) ──> METADATA & INDEXING                               |
++-----------------------------------------------------------------------------------------------+
 ```
 
 ### Group 1: Flight Operating Conditions (4 Features)
@@ -150,13 +132,12 @@ These columns start with `DETA` (efficiency loss) or `CW` (flow capacity degrada
 
 All dataset splits are stored as `.parquet` files (`train.parquet`, `val.parquet`, `test.parquet`). Here is why Parquet was chosen instead of plain `.csv` text files:
 
-```mermaid
-flowchart LR
-    CSV["Plain CSV Files<br/>• Huge file sizes (100+ MB)<br/>• Slow to parse line-by-line<br/>• Loses exact float precision<br/>• Inefficient on memory"]
-    
-    Parquet["Apache Parquet Files<br/>• Fast binary columnar storage<br/>• High Snappy/Gzip compression<br/>• Preserves exact 64-bit float math<br/>• Loads in milliseconds with PyArrow"]
-
-    CSV -.->|"Replaced by"| Parquet
+```text
+Plain CSV Files (Replaced)            Apache Parquet Files (Used in TurbofanGuard)
+• Huge text files (100+ MB)     ───>  • Compact binary columnar storage (Snappy/Gzip)
+• Slow line-by-line parsing     ───>  • Sub-second loading with PyArrow
+• Loses exact float precision   ───>  • Preserves exact 64-bit IEEE float math
+• High memory overhead          ───>  • Memory-efficient column-selective reading
 ```
 
 1. **Columnar Storage**: In a machine learning pipeline, we often want to read only the 18 input features and 14 targets. Parquet reads individual columns directly without having to parse every line of the file, making data loading up to 10 times faster.
