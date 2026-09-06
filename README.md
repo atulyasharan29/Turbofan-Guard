@@ -20,7 +20,9 @@ All technical documentation is organized in simple, easy-to-read guides with Git
 * **[Feature Scaling & Normalization](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/data_scaling.md)**: Why neural networks need scaling, StandardScaler, zero-leakage training fit, solving the DS01 zero-variance issue, and inverse transforms.
 * **[Neural Backbone Architecture](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/backbone_architecture.md)**: Deep dive into the 57,664-parameter backbone, multi-scale 1D convolutions (k=3, k=5), temporal pooling, snapshot fallback, and 64D latent state.
 * **[Machine Learning Strategy](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/ml_strategy.md)**: The physics of analytical redundancy, Step 1 Autoencoder vs. Step 2 Dual-Head network, adaptive thresholding (two-factor authentication for alarms), and evaluation metrics.
+* **[Evaluation & Scoring Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/evaluation_and_scoring_guide.md)**: In-depth breakdown of scoring formulas (MAPE, FAR, Point-by-point vs. Latched vs. Mission-level TPR, isolation accuracy, Hamming loss, latency) with real-world analogies.
 * **[Developer & Testing Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/developer_guide.md)**: How to run automated test scripts (`uv run python scripts/...`), manage JSON configs, and build next-stage modules.
+
 
 ---
 

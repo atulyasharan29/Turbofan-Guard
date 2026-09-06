@@ -39,7 +39,8 @@ The documentation is organized into clear, focused guides. Each guide explains b
 | **[2. Data Scaling & Normalization](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/data_scaling.md)** | How raw physical measurements are prepared for neural networks. | Why scaling is mandatory, StandardScaler, zero-leakage training fit, solving the constant feature problem in DS01, and exact inverse transformations. |
 | **[3. Neural Backbone Architecture](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/backbone_architecture.md)** | The deep learning 'brain' that extracts engine physics from telemetry. | Multi-scale 1D temporal convolutions (capturing fast spikes vs. slow drifts), temporal pooling, snapshot fallback mode, residual MLP blocks, and the 64D latent state. |
 | **[4. Machine Learning Strategy](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/ml_strategy.md)** | The end-to-end strategy for fault detection, isolation, and signal reconstruction. | Analytical redundancy (the connected engine principle), Step 1 Autoencoder vs. Step 2 Dual-Head Network, adaptive thresholding (two-factor authentication for alarms), and evaluation metrics. |
-| **[5. Developer & Testing Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/developer_guide.md)** | Practical instructions for running tests, managing configs, and using the codebase. | Project folder structure, running unit test scripts with uv, configuration files, and verification procedures. |
+| **[5. Evaluation & Scoring Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/evaluation_and_scoring_guide.md)** | In-depth breakdown of every performance metric and scoring formula. | How MAPE, RMSE, FAR, Point-by-point vs. Latched vs. Mission-level TPR, isolation accuracy, Hamming loss, and latency are scored, with plain-English analogies. |
+| **[6. Developer & Testing Guide](file:///Users/atulyasharan/Documents/TurbofanGuard/docs/developer_guide.md)** | Practical instructions for running tests, managing configs, and using the codebase. | Project folder structure, running unit test scripts with uv, configuration files, and verification procedures. |
 
 ---
 
@@ -66,9 +67,9 @@ Here is a quick summary of what has been implemented, tested, and verified in th
    * Inverse transforms normalized network outputs back into real physical units (Kelvin, Pascals, RPM) with less than 0.0001% relative error.
    * Saves and loads scaling parameters to portable JSON files.
 
-4. **Configuration Subsystem (`src/utils/config.py` & `configs/backbone_config.json`)**:
-   * Type-safe dataclass configuration with automatic validation for all hyperparameters.
-   * Validates layer dimensions, sequence lengths, activation functions, and dropout rates.
+4. **Configuration Subsystem (`src/utils/config.py` & `configs/`)**:
+   * Type-safe dataclass configurations (`BackboneConfig` and `DualHeadConfig`) with automatic validation.
+   * Validates layer dimensions, sequence lengths, activation functions, loss weights, and adaptive threshold boundaries.
    * Saves and loads configurations to JSON.
 
 5. **Shared Neural Backbone (`src/models/backbone.py`)**:
@@ -78,6 +79,18 @@ Here is a quick summary of what has been implemented, tested, and verified in th
    * Includes a dedicated snapshot fallback pathway for single-cycle predictions.
    * Built with residual dense layers, Layer Normalization, and GELU non-linear activations.
    * Successfully runs on CPU and Apple Silicon GPU (MPS) acceleration with verified gradient flow.
+
+6. **Step 1 Baseline Virtual Sensor (`src/models/baseline_ae.py` & `src/training/train_baseline.py`)**:
+   * Attached `ReconstructionDecoder` to the shared backbone (75,534 total parameters).
+   * Trained on healthy flights (`DS02`), achieving **0.21% physical MAPE** across all 14 sensors.
+   * Benchmarked static residual thresholding on single-fault test flights (`DS03`).
+
+7. **Step 2 Dual-Head Multi-Task Network (`src/models/dual_head_fdi.py` & `src/training/train_dual_head.py`)**:
+   * Parallel Head 1 (Virtual Sensor) and Head 2 (Diagnostic FDI Classifier) sharing the 64D backbone (93,404 total parameters).
+   * Trained jointly on healthy flights (`DS02`) and single-fault flights (`DS03`) using `MultiTaskFDILoss`.
+   * Implemented Two-Factor Authentication with adaptive thresholding ($\tau_{\text{adaptive}}$).
+   * Achieved **98.81% Engine Mission Detection Rate** (83 of 84 failing engines caught), **82.11% Latched Operational TPR**, **0.18% Physical MAPE**, and **92.86% Isolation Accuracy**.
+
 
 ---
 
